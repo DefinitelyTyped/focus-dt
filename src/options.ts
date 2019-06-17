@@ -61,6 +61,7 @@ export const options = yargs
         type: "count",
         alias: ["v"]
     })
-    .help();
+    .help()
+    .alias(["h", "?"], "help");
 
 export const argv = options.argv;

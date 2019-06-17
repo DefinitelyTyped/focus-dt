@@ -1,6 +1,6 @@
 {
   "name": "focus-dt",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A simple command-line tool for running down PRs on DefinitelyTyped",
   "bin": {
     "focus-dt": "bin/focus-dt"
@@ -21,6 +21,7 @@
   "devDependencies": {
     "@types/node": "^12.0.8",
     "@types/prompts": "^2.0.0",
+    "@types/winreg": "^1.2.30",
     "@types/yargs": "^13.0.0",
     "typescript": "^3.5.1"
   },
@@ -30,6 +31,7 @@
     "iterable-query": "^1.0.0-pre.15",
     "prompts": "^2.1.0",
     "vscode-chrome-debug-core": "^6.7.50",
+    "winreg": "^1.2.4",
     "yargs": "^13.2.4"
   }
 }
