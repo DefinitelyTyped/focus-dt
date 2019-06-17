@@ -1,0 +1,29 @@
+{
+  "name": "focus-dt",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "bin": {
+    "focus-dt": "dist/index"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "start": "npm run build & node dist"
+  },
+  "author": "Ron Buckton <ron.buckton@microsoft.com>",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/node": "^12.0.8",
+    "@types/prompts": "^2.0.0",
+    "@types/yargs": "^13.0.0",
+    "typescript": "^3.5.1"
+  },
+  "dependencies": {
+    "@octokit/rest": "^16.28.1",
+    "equatable": "^1.2.0",
+    "iterable-query": "^1.0.0-pre.15",
+    "prompts": "^2.1.0",
+    "vscode-chrome-debug-core": "^6.7.50",
+    "yargs": "^13.2.4"
+  }
+}
