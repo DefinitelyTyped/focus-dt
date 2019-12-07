@@ -37,7 +37,7 @@ export async function getChromePath() {
     return chromePath;
 }
 
-export async function spawnChromeAndWait(chromePath: string, url: string, port: number, verbose: boolean) {
+export async function spawnChromeAndWait(chromePath: string, url: string, port: number, verbose: boolean, timeout = 10000) {
     if (verbose) {
         console.log(`Launching chrome with debugger on port ${port}...`);
     }
@@ -55,11 +55,15 @@ export async function spawnChromeAndWait(chromePath: string, url: string, port: 
     }
 
     const connection = new chromeConnection.ChromeConnection(undefined, undefined);
-    await connection.attach("localhost", port, url, 10000);
+    await connection.attach("localhost", port, url, timeout);
     await connection.run();
+    if (verbose) {
+        console.log(`Chrome debugger is attached`);
+    }
+
     await new Promise(resolve => connection.onClose(resolve));
 
     if (verbose) {
-        console.log(`Chrome debugger was detached`);
+        console.log(`Chrome debugger has detached`);
     }
 }

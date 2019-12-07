@@ -39,7 +39,7 @@ export class ProjectService<K extends string = "Check and Merge" | "Review"> {
     constructor(options: ProjectServiceOptions<K>) {
         this._github = new Github(options.github);
         const {
-            owner, 
+            owner,
             repo,
             project = ProjectService.defaultProject,
             columns = ProjectService.defaultColumns,
@@ -96,7 +96,7 @@ export class ProjectService<K extends string = "Check and Merge" | "Review"> {
             .toArray();
     }
 
-    async getPull(card: Card): Promise<GetPullResult> {
+    async getPull(card: Card, includeDrafts?: boolean): Promise<GetPullResult> {
         const match = /(\d+)$/.exec(card.content_url);
         if (!match) {
             return { error: true, message: "Could not determine pull number" };
@@ -105,6 +105,10 @@ export class ProjectService<K extends string = "Check and Merge" | "Review"> {
         const pull = (await this._github.pulls.get({ ...this._ownerAndRepo, pull_number: +match[1] })).data;
         if (pull.state === "closed") {
             return { error: true, message: `'${pull.title}' is closed` };
+        }
+
+        if ((pull.draft || pull.mergeable_state === "draft") && !includeDrafts) {
+            return { error: true, message: `'${pull.title}' is a draft and is not yet ready for review` };
         }
 
         const labels = new Set(pull.labels.map(label => label.name));

@@ -34,7 +34,9 @@ async function main() {
         password,
         review,
         checkAndMerge,
-        port = getRandomPort()
+        draft,
+        port = getRandomPort(),
+        timeout = 10000
     } = argv;
 
     if (!review && !checkAndMerge) {
@@ -54,17 +56,17 @@ async function main() {
                 ],
             },
             {
-                type: ({ answers }) => answers.choice === "token" ? "text" : null,
+                type: (_, answers) => answers.choice === "token" ? "text" : null,
                 name: "token",
                 message: "token"
             },
             {
-                type: ({ answers }) => answers.choice === "username" ? "text" : null,
+                type: (_, answers) => answers.choice === "username" ? "text" : null,
                 name: "username",
                 message: "username"
             },
             {
-                type: ({ answers }) => answers.choice === "username" ? "text" : null,
+                type: (_, answers) => answers.choice === "username" ? "text" : null,
                 name: "password",
                 message: "password"
             },
@@ -131,7 +133,7 @@ async function main() {
         while (card = cards.shift()) {
             console.log();
 
-            const result = await service.getPull(card);
+            const result = await service.getPull(card, draft);
             if (result.error) {
                 console.log(`[${count - cards.length}/${count}] ${result.message}, skipping.`);
                 continue;
@@ -146,7 +148,7 @@ async function main() {
 \t${[...labels].join(', ')}
 `.trim());
 
-            await spawnChromeAndWait(chromePath, pull.html_url, port, !!argv.verbose);
+            await spawnChromeAndWait(chromePath, pull.html_url, port, !!argv.verbose, timeout);
         }
     }
 }

@@ -52,9 +52,18 @@ export const options = yargs
         type: "boolean",
         conficts: ["oldest"]
     })
+    .option("draft", {
+        desc: "Include 'Draft' PRs",
+        type: "boolean"
+    })
     .option("port", {
         desc: "The remote debugging port to use to wait for the chrome tab to exit.",
         type: "number"
+    })
+    .options("timeout", {
+        desc: "The number of milliseconds to wait for the debugger to attach to the chrome process (default: 10,000).",
+        type: "number",
+        default: 10000
     })
     .option("verbose", {
         desc: "Increases the log level",
