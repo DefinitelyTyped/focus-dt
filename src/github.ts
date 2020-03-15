@@ -12,7 +12,9 @@ export interface ProjectServiceOptions<K extends string> {
 export interface Project extends Github.ProjectsListForRepoResponseItem {}
 export interface Column extends Github.ProjectsListColumnsResponseItem {}
 export interface Card extends Github.ProjectsListCardsResponseItem {}
-export interface Pull extends Github.PullsGetResponse {}
+export interface Pull extends Github.PullsGetResponse {
+    approved?: boolean;
+}
 
 export interface GetPullSuccessResult {
     error: false;
@@ -35,6 +37,7 @@ export class ProjectService<K extends string = "Check and Merge" | "Review"> {
     private _project: string;
     private _columns: readonly K[];
     private _ownerAndRepo: { owner: string, repo: string };
+    private _userId: number | undefined;
 
     constructor(options: ProjectServiceOptions<K>) {
         this._github = new Github(options.github);
@@ -116,6 +119,62 @@ export class ProjectService<K extends string = "Check and Merge" | "Review"> {
             return { error: true, message: `'${pull.title}' is awaiting revisions` };
         }
 
-        return { error: false, pull, labels };
+        const id = await this.whoAmiI();
+        const reviews = await this._github.pulls.listReviews({
+            ...this._ownerAndRepo,
+            pull_number: pull.number
+        });
+        const review = reviews.data?.find(review => review.user.id === id);
+        const approved = review?.state === "APPROVED";
+        return { error: false, pull: { ...pull, approved }, labels };
+    }
+
+    async whoAmiI(): Promise<number | undefined> {
+        if (this._userId === undefined) {
+            const auth = await this._github.users.getAuthenticated();
+            if (!auth.data) {
+                return;
+            }
+            this._userId = auth.data.id;
+        }
+        return this._userId;
+    }
+
+    async approvePull(pull: Pull): Promise<void> {
+        const auth = await this._github.users.getAuthenticated();
+        if (!auth.data) {
+            return;
+        }
+
+        const id = auth.data.id;
+        const reviews = await this._github.pulls.listReviews({ ...this._ownerAndRepo, pull_number: pull.number });
+        if (reviews.data) {
+            for (const review of reviews.data) {
+                if (review.user.id === id && review.state === "APPROVED") return;
+            }
+        }
+
+        const review = await this._github.pulls.createReview({
+            ...this._ownerAndRepo,
+            pull_number: pull.number,
+        });
+        if (!review.data) return;
+
+        await this._github.pulls.submitReview({
+            ...this._ownerAndRepo,
+            pull_number: pull.number,
+            event: "APPROVE",
+            review_id: review.data.id
+        });
+
+        pull.approved = true;
+    }
+
+    async mergePull(pull: Pull, method?: "merge" | "squash" | "rebase"): Promise<void> {
+        await this._github.pulls.merge({
+            ...this._ownerAndRepo,
+            pull_number: pull.number,
+            merge_method: method
+        });
     }
 }

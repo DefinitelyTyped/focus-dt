@@ -60,10 +60,15 @@ export const options = yargs
         desc: "The remote debugging port to use to wait for the chrome tab to exit.",
         type: "number"
     })
-    .options("timeout", {
+    .option("timeout", {
         desc: "The number of milliseconds to wait for the debugger to attach to the chrome process (default: 10,000).",
         type: "number",
         default: 10000
+    })
+    .option("merge", {
+        desc: "Set the default merge option to one of 'merge', 'squash', or 'rebase'.",
+        type: "string",
+        choices: ["merge", "squash", "rebase", undefined]
     })
     .option("verbose", {
         desc: "Increases the log level",

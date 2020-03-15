@@ -1,6 +1,6 @@
 {
   "name": "focus-dt",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A simple command-line tool for running down PRs on DefinitelyTyped",
   "bin": {
     "focus-dt": "bin/focus-dt"
@@ -23,9 +23,11 @@
     "@types/prompts": "^2.0.0",
     "@types/winreg": "^1.2.30",
     "@types/yargs": "^13.0.0",
-    "typescript": "^3.5.1"
+    "chalk": "^3.0.0",
+    "typescript": "^3.8.3"
   },
   "dependencies": {
+    "@esfx/async-canceltoken": "^1.0.0-pre.13",
     "@octokit/rest": "^16.28.1",
     "equatable": "^1.2.0",
     "iterable-query": "^1.0.0-pre.15",
