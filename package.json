@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "tsc -p .",
-    "start": "npm run build & node dist"
+    "start": "npm run build && node dist"
   },
   "author": "Ron Buckton <ron.buckton@microsoft.com>",
   "license": "Apache-2.0",
