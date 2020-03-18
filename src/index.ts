@@ -50,6 +50,10 @@ async function init() {
         checkAndMerge = true;
     }
 
+    if (!token) {
+        token = process.env.GITHUB_API_TOKEN ?? process.env.FOCUS_DT_GITHUB_API_TOKEN ?? process.env.AUTH_TOKEN 
+    }
+
     if (!token && (!username || !password)) {
         ({ token, username, password } = await prompts([
             {

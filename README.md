@@ -34,3 +34,7 @@ focus-dt [options]
   --verbose, -v    Increases the log level                               [count]
   --help           Show help                                           [boolean]
 ```
+
+### Token Acquisition
+
+If not GitHub auth token is provided, then the script will look in your host environment for: `GITHUB_API_TOKEN`, `FOCUS_DT_GITHUB_API_TOKEN` and `AUTH_TOKEN` before asking for a token.
