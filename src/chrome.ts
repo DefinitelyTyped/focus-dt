@@ -1,14 +1,18 @@
+import { CancelToken } from "@esfx/async-canceltoken";
 import { regQuery } from "./registry";
-import { spawn } from "child_process";
+import { spawn, ChildProcess } from "child_process";
 import { chromeConnection } from "vscode-chrome-debug-core";
 import { existsSync } from "fs";
 import Registry = require("winreg");
+import { EventEmitter } from "events";
 
 const defaultChromePaths: Partial<Record<NodeJS.Platform, string[]>> = {
     win32: ["C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"],
     darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
     linux: ["/usr/bin/google-chrome"],
 };
+
+const indexUrl = `file:///${require.resolve("../assets/index.html").replace(/\\/g, "/").replace(/^\//, "")}`;
 
 export async function getChromePath() {
     let chromePath: string | undefined;
@@ -37,33 +41,80 @@ export async function getChromePath() {
     return chromePath;
 }
 
-export async function spawnChromeAndWait(chromePath: string, url: string, port: number, verbose: boolean, timeout = 10000) {
-    if (verbose) {
-        console.log(`Launching chrome with debugger on port ${port}...`);
+export class Chrome extends EventEmitter {
+    private _port: number;
+    private _timeout: number;
+    private _opening = false;
+    private _proc: ChildProcess | undefined;
+    private _connection!: chromeConnection.ChromeConnection;
+
+    constructor(port: number, timeout: number) {
+        super();
+        this._port = port;
+        this._timeout = timeout;
     }
 
-    const proc = spawn(chromePath, [
-        '--no-first-run',
-        '--no-default-browser-check',
-        `--remote-debugging-port=${port}`,
-        url,
-    ], { detached: true });
-    proc.unref();
-
-    if (verbose) {
-        console.log(`Attaching debugger on port ${port}...`);
+    get isOpen() {
+        return !this._opening && !!this._connection && this._connection.isAttached;
     }
 
-    const connection = new chromeConnection.ChromeConnection(undefined, undefined);
-    await connection.attach("localhost", port, url, timeout);
-    await connection.run();
-    if (verbose) {
-        console.log(`Chrome debugger is attached`);
+    async navigateTo(url: string) {
+        if (!this.isOpen) {
+            await this.open(url);
+        }
+        else {
+            await this._connection.api.Page.navigate({
+                url,
+                transitionType: "typed"
+            });
+        }
     }
 
-    await new Promise(resolve => connection.onClose(resolve));
+    async reset() {
+        await this.navigateTo(indexUrl);
+    }
 
-    if (verbose) {
-        console.log(`Chrome debugger has detached`);
+    async open(url = indexUrl) {
+        if (this.isOpen) return;
+        try {
+            this._opening = true;
+            this._proc = undefined;
+            this._connection = undefined!;
+
+            const chromePath = await getChromePath();
+            const proc = spawn(chromePath, [
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--enable-automation',
+                `--remote-debugging-port=${this._port}`,
+                url,
+            ], { detached: true });
+            proc.unref();
+
+            const connection = new chromeConnection.ChromeConnection(undefined, undefined);
+            await connection.attach("127.0.0.1", this._port, url, this._timeout);
+            await connection.run();
+
+            this._proc = proc;
+            this._connection = connection;
+            this._connection.onClose(() => this.emit("closed"));
+        }
+        finally {
+            this._opening = false;
+        }
+    }
+
+    async close() {
+        if (!this.isOpen) return;
+        const closePromise = new Promise<"close">(resolve => this._connection.onClose(() => resolve("close")));
+        const timeoutPromise = new Promise<"timeout">(resolve => setTimeout(resolve, 1000, "timeout"));
+        try { await this._connection.api.Browser.close(); } catch {}
+        const result = await Promise.race([closePromise, timeoutPromise]);
+        if (result === "timeout") {
+            try { this._connection.close(); } catch { }
+            try { this._proc?.kill(); } catch { }
+        }
+        this._connection = undefined!;
+        this._proc = undefined;
     }
 }
