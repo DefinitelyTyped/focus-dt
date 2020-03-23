@@ -27,7 +27,6 @@
     "typescript": "^3.8.3"
   },
   "dependencies": {
-    "@esfx/async-canceltoken": "^1.0.0-pre.13",
     "@octokit/rest": "^16.28.1",
     "equatable": "^1.2.0",
     "iterable-query": "^1.0.0-pre.15",

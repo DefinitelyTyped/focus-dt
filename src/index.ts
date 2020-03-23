@@ -14,16 +14,14 @@
    limitations under the License.
 */
 
-import { CancelToken, CancelSource } from "@esfx/async-canceltoken";
 import { argv } from "./options";
 import prompts = require("prompts");
-import Github = require("@octokit/rest");
-import { ProjectService, Column, Card, Pull, GetPullResult } from "./github";
-import { getChromePath, Chrome } from "./chrome";
+import { ProjectService, Column, Card, Pull } from "./github";
+import { Chrome } from "./chrome";
 import chalk from "chalk";
 import * as readline from "readline";
 import * as fs from "fs";
-import { Prompt, pushPrompt, Option, popPrompt, waitForPause as waitForPrompt, showPrompt, refreshPrompt, hidePrompt, addOnQuit, getCurrentPrompt } from "./prompt";
+import { Prompt, pushPrompt, popPrompt, showPrompt, refreshPrompt, hidePrompt, addOnQuit, getCurrentPrompt } from "./prompt";
 
 function getRandomPort() {
     return 9000 + Math.floor(Math.random() * 999);
@@ -38,6 +36,7 @@ async function init() {
         checkAndMerge = false,
         draft = false,
         oldest = false,
+        approve = "manual",
         merge,
         port = 9222,
         timeout = 10000,
@@ -51,7 +50,7 @@ async function init() {
     }
 
     if (!token) {
-        token = process.env.GITHUB_API_TOKEN ?? process.env.FOCUS_DT_GITHUB_API_TOKEN ?? process.env.AUTH_TOKEN 
+        token = process.env.GITHUB_API_TOKEN ?? process.env.FOCUS_DT_GITHUB_API_TOKEN ?? process.env.AUTH_TOKEN
     }
 
     if (!token && (!username || !password)) {
@@ -86,6 +85,9 @@ async function init() {
     const defaultMerge: "merge" | "squash" | "rebase" | undefined =
         merge === "merge" || merge === "squash" || merge === "rebase" ? merge : undefined;
 
+    const approvalMode: "manual" | "auto" | "always" =
+        approve === "manual" || approve === "auto" || approve === "always" ? approve : "manual";
+
     return {
         token,
         username,
@@ -93,6 +95,7 @@ async function init() {
         review,
         checkAndMerge,
         defaultMerge,
+        approvalMode,
         draft,
         oldest,
         port,
@@ -108,6 +111,7 @@ async function main() {
         review,
         checkAndMerge,
         defaultMerge,
+        approvalMode,
         draft,
         oldest,
         port,
@@ -120,197 +124,340 @@ async function main() {
 
     const runDownPrompt: Prompt = {
         title: "Options",
-        options: [{
-            key: "f",
-            description: "change filters",
-            advanced: true,
-            action: () => {
-                requestedCheckAndMerge = checkAndMerge;
-                requestedReview = review;
-                requestedDraft = draft;
-                requestedOldest = oldest;
-                pushPrompt(filterPrompt);
-            },
-        }, {
-            key: "alt+m",
-            advanced: true,
-            description: "set the default merge option",
-            action: () => {
-                pushPrompt(mergePrompt);
-            }
-        }, {
-            key: "a",
-            description: "approve",
-            disabled: () => !!currentPull?.approved,
-            action: async () => {
-                if (!currentPull) return;
-                hidePrompt();
-                process.stdout.write("Approving...");
-                await service.approvePull(currentPull);
-                process.stdout.write("Approved.\n\n");
-                log.write(`[${new Date().toISOString()}] #${currentPull.number} '${currentPull.title}': Approved\n`);
-                refreshPrompt();
-                showPrompt();
-            }
-        }, {
-            key: "m",
-            description: () => defaultMerge ? `merge using ${defaultMerge === "merge" ? "merge commit" : defaultMerge}` : "merge",
-            action: () => {
-                if (defaultMerge) {
-                    return doMerge(defaultMerge);
-                }
-                return pushPrompt(mergePrompt).then(() => {
-                    refreshPrompt();
-                    if (defaultMerge) {
-                        return doMerge(defaultMerge);
+        options: [
+            {
+                key: "f",
+                description: "change filters",
+                advanced: true,
+                action: async (_, context) => {
+                    const result = await pushPrompt(filterPrompt);
+                    if (result) {
+                        context.close();
                     }
-                });
+                },
+            },
+            {
+                key: "alt+a",
+                description: "set the default approval option",
+                advanced: true,
+                action: async (_, context) => {
+                    const result = await pushPrompt(approvalPrompt);
+                    if (result) {
+                        context.refresh();
+                    }
+                }
+            },
+            {
+                key: "alt+m",
+                description: "set the default merge option",
+                advanced: true,
+                action: async (_, context) => {
+                    const result = await pushPrompt(mergePrompt);
+                    if (result) {
+                        context.refresh();
+                    }
+                }
+            },
+            {
+                key: "a",
+                description: "approve",
+                disabled: () => !!currentPull?.approvedByMe,
+                hidden: () => approvalMode !== "manual",
+                action: async (_, context) => {
+                    if (!currentPull) return;
+                    context.hide();
+                    process.stdout.write("Approving...");
+                    await service.approvePull(currentPull);
+                    process.stdout.write("Approved.\n\n");
+                    log.write(`[${new Date().toISOString()}] #${currentPull.number} '${currentPull.title}': Approved\n`);
+                    context.refresh();
+                    context.show();
+                }
+            },
+            {
+                key: "m",
+                description: () => `${(approvalMode === "auto" ? !currentPull?.approvedByAll : approvalMode === "always" ? !currentPull?.approvedByMe : false) ? "approve and " : ""}merge${defaultMerge ? ` using ${defaultMerge === "merge" ? "merge commit" : defaultMerge}` : ""}`,
+                action: async (_, context) => {
+                    if (!currentPull) return;
+
+                    const pull = currentPull;
+                    if (!defaultMerge) {
+                        const result = await pushPrompt(mergePrompt);
+                        if (result) {
+                            context.refresh();
+                        }
+                        if (!defaultMerge) return;
+                    }
+
+                    context.hide();
+
+                    const merge = defaultMerge;
+                    const needsApproval =
+                        approvalMode === "auto" ? !await service.isApprovedByAll(pull) :
+                        approvalMode === "always" ? !await service.isApprovedByMe(pull) :
+                        false;
+
+                    if (needsApproval) {
+                        process.stdout.write("Approving...");
+                        await service.approvePull(pull);
+                        process.stdout.write("Approved.\n");
+                        log.write(`[${new Date().toISOString()}] #${pull.number} '${pull.title}': Approved\n`);
+                    }
+
+                    process.stdout.write("Merging...");
+                    await service.mergePull(pull, merge);
+                    log.write(`[${new Date().toISOString()}] #${pull.number} '${pull.title}': Merged using ${merge}\n`);
+                    process.stdout.write("Merged.\n\n");
+
+                    context.close();
+                }
+            },
+            {
+                key: "s",
+                description: "skip",
+                action: (_, context) => {
+                    context.close();
+                }
             }
-        }, {
-            key: "s",
-            description: "skip",
-            action: () => {
-                popPrompt();
-            }
-        }]
+        ]
     };
 
-    let requestedCheckAndMerge: boolean;
-    let requestedReview: boolean;
-    let requestedDraft: boolean;
-    let requestedOldest: boolean;
-    const filterPrompt: Prompt = {
-        title: "Filter Options",
-        options: [{
-            key: "c",
-            description: () => `${chalk[requestedCheckAndMerge === checkAndMerge ? "reset" : "red"](requestedCheckAndMerge ? "exclude" : "include")} 'Check and Merge' column`,
-            action: () => {
-                requestedCheckAndMerge = !requestedCheckAndMerge;
-                refreshPrompt();
-            }
-        }, {
-            key: "r",
-            description: () => `${chalk[requestedReview === review ? "reset" : "red"](requestedReview ? "exclude" : "include")} 'Review' column`,
-            action: () => {
-                requestedReview = !requestedReview;
-                refreshPrompt();
-            }
-        }, {
-            key: "d",
-            description: () => `${chalk[requestedDraft === draft ? "reset" : "red"](requestedDraft ? "exclude" : "include")} Draft PRs`,
-            action: () => {
-                requestedDraft = !requestedDraft;
-                refreshPrompt();
-            }
-        }, {
-            key: "o",
-            description: () => `order by ${chalk[requestedOldest === oldest ? "reset" : "red"](requestedOldest ? "newest" : "oldest")}`,
-            action: () => {
-                requestedOldest = !requestedOldest;
-                refreshPrompt();
-            }
-        }, {
-            key: "enter",
-            description: "accept changes",
-            disabled: () =>
-                requestedCheckAndMerge === checkAndMerge &&
-                requestedReview === review &&
-                requestedDraft === draft &&
-                requestedOldest === oldest,
-            action: () => {
-                let shouldReset = false;
-                if (requestedCheckAndMerge !== checkAndMerge) {
-                    checkAndMerge = requestedCheckAndMerge;
-                    checkAndMergeState = undefined;
-                    shouldReset = true;
-                }
-                if (requestedReview !== review) {
-                    review = requestedReview;
-                    reviewState = undefined;
-                    shouldReset = true;
-                }
-                if (requestedDraft !== draft) {
-                    draft = requestedDraft;
-                    checkAndMergeState = undefined;
-                    reviewState = undefined;
-                    shouldReset = true;
-                }
-                if (requestedOldest !== oldest) {
-                    oldest = requestedOldest;
-                    checkAndMergeState = undefined;
-                    reviewState = undefined;
-                    shouldReset = true;
-                }
-                if (shouldReset) {
-                    chrome.reset();
-                }
-                popPrompt();
-                popPrompt();
-            }
-        }, {
-            key: "escape",
-            description: "cancel",
-            action: () => {
-                hidePrompt();
-                popPrompt();
-            }
-        }]
-    };
-
-    async function doMerge(merge: "merge" | "squash" | "rebase") {
-        if (!currentPull) return;
-        hidePrompt();
-        defaultMerge = merge;
-        process.stdout.write("Merging...");
-        await service.mergePull(currentPull, merge);
-        process.stdout.write("Merged.\n\n");
-        log.write(`[${new Date().toISOString()}] #${currentPull!.number} '${currentPull!.title}': Merged using ${merge}\n`);
-        if (getCurrentPrompt() === mergePrompt) {
-            popPrompt();
-        }
-        if (getCurrentPrompt() === runDownPrompt) {
-            popPrompt();
-        }
+    interface FilterPromptState {
+        checkAndMerge: boolean;
+        review: boolean;
+        draft: boolean;
+        oldest: boolean;
     }
 
-    let requestedDefaultMerge: "merge" | "squash" | "rebase" | undefined;
-    const mergePrompt: Prompt = {
+    const filterPrompt: Prompt<boolean, FilterPromptState> = {
+        title: "Filter Options",
+        onEnter: ({ state }) => {
+            state.checkAndMerge = checkAndMerge;
+            state.review = review;
+            state.draft = draft;
+            state.oldest = oldest;
+        },
+        options: [
+            {
+                key: "c",
+                description: ({ state }) => `${(state.checkAndMerge !== checkAndMerge ? chalk.yellow : chalk.reset)(state.checkAndMerge ? "exclude" : "include")} 'Check and Merge' column`,
+                checked: ({ state }) => state.checkAndMerge,
+                checkStyle: "checkbox",
+                action: (_, context) => {
+                    context.state.checkAndMerge = !context.state.checkAndMerge;
+                    context.refresh();
+                }
+            },
+            {
+                key: "r",
+                description: ({ state }) => `${(state.review !== review ? chalk.yellow : chalk.reset)(state.review ? "exclude" : "include")} 'Review' column`,
+                checkStyle: "checkbox",
+                checked: ({ state }) => state.review,
+                action: (_, context) => {
+                    context.state.review = !context.state.review;
+                    context.refresh();
+                }
+            },
+            {
+                key: "d",
+                description: ({ state }) => `${(state.draft !== draft ? chalk.yellow : chalk.reset)(state.draft ? "exclude" : "include")} Draft PRs`,
+                checkStyle: "checkbox",
+                checked: ({ state }) => state.draft,
+                action: (_, context) => {
+                    context.state.draft = !context.state.draft;
+                    context.refresh();
+                }
+            },
+            {
+                key: "o",
+                description: ({ state }) => `order by ${(state.oldest !== oldest ? chalk.yellow : chalk.reset)(state.oldest ? "newest" : "oldest")}`,
+                checkStyle: "checkbox",
+                checked: ({ state }) => state.oldest,
+                action: (_, context) => {
+                    context.state.oldest = !context.state.oldest;
+                    context.refresh();
+                }
+            },
+            {
+                key: "enter",
+                description: "accept changes",
+                disabled: ({ state }) =>
+                    !!state.checkAndMerge === checkAndMerge &&
+                    !!state.review === review &&
+                    !!state.draft === draft &&
+                    !!state.oldest === oldest,
+                action: (_, context) => {
+                    let shouldReset = false;
+                    const { state } = context;
+                    if (!!state.checkAndMerge !== checkAndMerge) {
+                        checkAndMerge = !!state.checkAndMerge;
+                        checkAndMergeState = undefined;
+                        shouldReset = true;
+                    }
+                    if (!!state.review !== review) {
+                        review = !!state.review;
+                        reviewState = undefined;
+                        shouldReset = true;
+                    }
+                    if (!!state.draft !== draft) {
+                        draft = !!state.draft;
+                        checkAndMergeState = undefined;
+                        reviewState = undefined;
+                        shouldReset = true;
+                    }
+                    if (!!state.oldest !== oldest) {
+                        oldest = !!state.oldest;
+                        checkAndMergeState = undefined;
+                        reviewState = undefined;
+                        shouldReset = true;
+                    }
+                    if (shouldReset) {
+                        chrome.reset();
+                    }
+                    context.close(shouldReset);
+                }
+            },
+            {
+                key: "escape",
+                description: "cancel",
+                action: (_, context) => {
+                    context.close(false);
+                }
+            }
+        ]
+    };
+
+    interface ApprovalPromptState {
+        approvalMode: "manual" | "auto" | "always";
+    }
+
+    const approvalPrompt: Prompt<boolean, ApprovalPromptState> = {
+        title: "Approval Options",
+        onEnter: ({ state }) => {
+            state.approvalMode = approvalMode;
+        },
+        options: [
+            {
+                key: "m",
+                description: "approve PRs manually.",
+                checked: ({ state }) => state.approvalMode === "manual",
+                checkStyle: "radio",
+                checkColor: ({ state }) => ({ color: state.approvalMode !== "manual" && approvalMode === "manual" ? chalk.yellow : undefined }),
+                action: (_, context) => {
+                    context.state.approvalMode = "manual";
+                    context.refresh();
+                }
+            },
+            {
+                key: "n",
+                description: "approve PRs automatically when there are no other approvals.",
+                checked: ({ state }) => state.approvalMode === "auto",
+                checkStyle: "radio",
+                checkColor: ({ state }) => ({ color: state.approvalMode !== "auto" && approvalMode === "auto" ? chalk.yellow : undefined }),
+                action: (_, context) => {
+                    context.state.approvalMode = "auto";
+                    context.refresh();
+                }
+            },
+            {
+                key: "a",
+                description: "approve PRs automatically if you haven't already approved.",
+                checked: ({ state }) => state.approvalMode === "always",
+                checkStyle: "radio",
+                checkColor: ({ state }) => ({ color: state.approvalMode !== "always" && approvalMode === "always" ? chalk.yellow : undefined }),
+                action: (_, context) => {
+                    context.state.approvalMode = "always";
+                    context.refresh();
+                }
+            },
+            {
+                key: "enter",
+                description: "accept changes",
+                disabled: ({ state }) => state.approvalMode === approvalMode,
+                action: (_, context) => {
+                    const oldApprovalMode = approvalMode;
+                    approvalMode = context.state.approvalMode ?? approvalMode;
+                    context.close(approvalMode !== oldApprovalMode);
+                }
+            },
+            {
+                key: "escape",
+                description: "cancel",
+                action: (_, context) => context.close(false)
+            }
+        ]
+    };
+
+    interface MergePromptState {
+        defaultMerge: "merge" | "squash" | "rebase";
+    }
+
+    const mergePrompt: Prompt<boolean, MergePromptState> = {
         title: "Merge Options",
-        options: [{
-            key: "m",
-            description: () => chalk[defaultMerge === "merge" ? "green" : requestedDefaultMerge === "merge" ? "red" : "reset"](`merge using merge commit`),
-            action: () => {
-                requestedDefaultMerge = "merge";
-                refreshPrompt();
+        onEnter: ({ state }) => {
+            state.defaultMerge = defaultMerge;
+        },
+        options: [
+            {
+                key: "m",
+                description: "merge using merge commit",
+                checked: ({ state }) => state.defaultMerge === "merge",
+                checkStyle: "radio",
+                checkColor: ({ state }) => ({ color: state.defaultMerge !== "merge" && defaultMerge === "merge" ? chalk.yellow : undefined }),
+                action: (_, context) => {
+                    context.state.defaultMerge = "merge";
+                    context.refresh();
+                }
+            },
+            {
+                key: "s",
+                description: "merge using squash",
+                checkStyle: "radio",
+                checked: ({ state }) => state.defaultMerge === "squash",
+                checkColor: ({ state }) => ({ color: state.defaultMerge !== "squash" && defaultMerge === "squash" ? chalk.yellow : undefined }),
+                action: (_, context) => {
+                    context.state.defaultMerge = "squash";
+                    context.refresh();
+                }
+            },
+            {
+                key: "r",
+                description: "merge using rebase",
+                checkStyle: "radio",
+                checked: ({ state }) => state.defaultMerge === "rebase",
+                checkColor: ({ state }) => ({ color: state.defaultMerge !== "rebase" && defaultMerge === "rebase" ? chalk.yellow : undefined }),
+                action: (_, context) => {
+                    context.state.defaultMerge = "rebase";
+                    context.refresh();
+                }
+            },
+            {
+                key: "x",
+                description: "clear default merge option",
+                checkStyle: "radio",
+                checked: ({ state }) => state.defaultMerge === undefined,
+                checkColor: ({ state }) => ({ color: state.defaultMerge !== undefined && defaultMerge === undefined ? chalk.yellow : undefined }),
+                action: (_, context) => {
+                    context.state.defaultMerge = undefined;
+                    context.refresh();
+                }
+            },
+            {
+                key: "enter",
+                description: "accept changes",
+                disabled: ({ state }) => state.defaultMerge === defaultMerge,
+                action: (_, context) => {
+                    const oldDefaultMerge = defaultMerge;
+                    defaultMerge = context.state.defaultMerge;
+                    context.close(defaultMerge !== oldDefaultMerge);
+                }
+            },
+            {
+                key: "escape",
+                description: "cancel",
+                action: (_, context) => context.close(false)
             }
-        }, {
-            key: "s",
-            description: () => chalk[defaultMerge === "squash" ? "green" : requestedDefaultMerge === "squash" ? "red" : "reset"](`merge using squash`),
-            action: () => {
-                requestedDefaultMerge = "squash";
-                refreshPrompt();
-            }
-        }, {
-            key: "r",
-            description: () => chalk[defaultMerge === "rebase" ? "green" : requestedDefaultMerge === "rebase" ? "red" : "reset"](`merge using rebase`),
-            action: () => {
-                requestedDefaultMerge = "rebase";
-                refreshPrompt();
-            }
-        }, {
-            key: "enter",
-            description: "accept changes",
-            disabled: () => requestedDefaultMerge === defaultMerge,
-            action: () => {
-                defaultMerge = requestedDefaultMerge;
-                popPrompt();
-                refreshPrompt();
-            }
-        }, {
-            key: "escape",
-            description: "cancel",
-            action: () => popPrompt()
-        }]
+        ]
     };
 
     const chrome = new Chrome(port, timeout);
@@ -368,15 +515,12 @@ async function main() {
 
     while (true) {
         currentPull = undefined;
-        let dataRequested = false;
         if (checkAndMerge && shouldPopulateState(checkAndMergeState)) {
             checkAndMergeState = await populateState(columns["Check and Merge"]);
-            dataRequested = true;
         }
 
         if (review && shouldPopulateState(reviewState)) {
             reviewState = await populateState(columns["Review"]);
-            dataRequested = true;
         }
 
         if (lastShowCheckAndMerge !== checkAndMerge || lastShowReview !== review) {
@@ -423,15 +567,17 @@ async function main() {
 
             const { pull, labels } = result;
             currentPull = pull;
-            console.log(`[${column.offset}/${column.cards.length}] ${pull.title}\n\t${chalk.underline(chalk.cyan(pull.html_url))}\n\tupdated: ${card.updated_at}\n\tapproved by you: ${pull.approved ? chalk.green("yes") : "no"}\n\t${[...labels].join(', ')}`);
+            console.log(
+                `[${column.offset}/${column.cards.length}] ${pull.title}\n` +
+                `\t${chalk.underline(chalk.cyan(pull.html_url))}\n` +
+                `\tupdated: ${card.updated_at}\n` +
+                `\tapproved by you: ${pull.approvedByMe ? chalk.green("yes") : "no"}, approved: ${pull.approvedByAll ? chalk.green("yes") : "no"}\n` +
+                `\t${[...labels].join(', ')}`);
             console.log();
-
             await chrome.navigateTo(pull.html_url);
         }
 
-        pushPrompt(runDownPrompt);
-        await waitForPrompt();
-        popPrompt();
+        await pushPrompt(runDownPrompt);
         shouldClear = true;
     }
 

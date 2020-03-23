@@ -1,120 +1,212 @@
 import * as readline from "readline";
 import chalk from "chalk";
+import stripAnsi from "strip-ansi";
 
-let currentPrompt: PromptState | undefined;
-const promptStack: PromptState[] = [];
+let currentPrompt: EvaluatedPrompt<any, any> | undefined;
+const promptStack: EvaluatedPrompt<any, any>[] = [];
 const newLineRegExp = /\r\n?|\n/g;
 
-export interface Prompt {
-    header?: string | (() => string);
-    title: string | (() => string);
-    options: Option[];
-    onCancel?: () => void;
+export interface PromptContext<R, S> {
+    readonly prompt: Prompt<R, S>;
+    readonly state: Partial<S>;
+    showAdvanced: boolean;
+    result: R | undefined;
+
+    hide(): boolean;
+    show(): boolean;
+    refresh(): void;
+    close(result?: R): void;
 }
 
-export type PromptKey = string | readline.Key | readonly (string | readline.Key)[];
-
-export interface Option {
-    readonly key: PromptKey;
-    readonly description: string | (() => string);
-    readonly advanced?: boolean;
-    readonly disabled?: boolean | (() => boolean);
-    action: (key: readline.Key) => void | PromiseLike<void>;
+export interface Prompt<R = unknown, S = {}> {
+    /** A header message to display above the prompt title. */
+    readonly header?: string | Evaluatable<string, R, S>;
+    /** The title of the prompt. */
+    readonly title: string | Evaluatable<string, R, S>;
+    /** The options presented in the prompt */
+    readonly options: readonly Option<R, S>[] | Evaluatable<readonly Option<R, S>[], R, S>;
+    onEnter?: (context: PromptContext<R, S>) => void | PromiseLike<void>;
+    onExit?: (context: PromptContext<R, S>) => void | PromiseLike<void>;
 }
 
-interface PromptState extends Prompt {
-    source: Prompt;
-    promise: Promise<void>;
-    resolve: () => void;
-    header?: string;
-    title: string;
-    options: OptionState[];
-    visible?: boolean;
-    keypressBlocked?: boolean;
-    hasAdvancedOption?: boolean;
-    showAdvanced?: boolean;
-    formattedBasic?: string;
-    formattedBasicLines?: number;
-    formattedAdvanced?: string;
-    formattedAdvancedLines?: number;
+export type PromptKey = string | [string, ...string[]];
+
+export interface Option<R, S> {
+    /** The key associated with the option. If this is an array, the first entry is the default key and the remaining entries are alternate keys. */
+    readonly key: PromptKey | Evaluatable<PromptKey, R, S>;
+    /** The description for the option. Appears in the place of ${desc} in `> Press ${key} to ${desc}.` */
+    readonly description: string | Evaluatable<string, R, S>;
+    /** Indicates whether the option is an advanced option and is hidden by default. */
+    readonly advanced?: boolean | Evaluatable<boolean, R, S>;
+    /** Indicates whether the option is disabled and should not be handled. Disabled options are greyed out. */
+    readonly disabled?: boolean | Evaluatable<boolean, R, S>;
+    /** Indicates whether the option is hidden and should not be displayed. Hidden options can still be triggered. */
+    readonly hidden?: boolean | Evaluatable<boolean, R, S>;
+    /** Indicates whether the option is checked. */
+    readonly checked?: boolean | undefined | Evaluatable<boolean | undefined, R, S>;
+    readonly checkColor?: { color: chalk.ChalkFunction | undefined } | Evaluatable<{ color: chalk.ChalkFunction | undefined } | undefined, R, S>;
+    readonly checkStyle?: "checkbox" | "radio" | undefined | Evaluatable<"checkbox" | "radio" | undefined, R, S>;
+    /** The action to execute when the option is selected. */
+    readonly action: (key: Key, context: PromptContext<R, S>) => void | PromiseLike<void>;
 }
 
-interface OptionState extends Option {
-    readonly description: string;
-    readonly disabled?: boolean;
-    formatted?: string;
+interface EvaluatedPrompt<R, S> {
+    prompt: Prompt<R, S>;               // the original `Prompt` this was created from.
+    context: PromptContext<R, S>;       // an object that exposes some prompt context to consumers.
+    state: Partial<S>;
+    header?: string;                    // the evaluated header of the prompt.
+    title: string;                      // the evaluated title of the prompt.
+    options: EvaluatedOption<R, S>[];   // the evaluated options of the prompt.
+    result?: R;
+    promise: Promise<void>;             // a promise that is resolved when the prompt is closed.
+    resolve: () => void;                // a callback used to resolve the promise for the prompt.
+    reject: (reason: any) => void;      // a callback used to reject the promise for the prompt.
+    visible?: boolean;                  // indicates whether the prompt is currently visible.
+    closed?: boolean;                   // indicates whether the prompt has been closed.
+    keypressBlocked?: boolean;          // indicates whether keypress events are blocked.
+    hasAdvancedOption?: boolean;        // indicates whether the prompt has any advanced options.
+    hasCheckedOption?: boolean;         // indicates whether the prompt has any checked options.
+    showAdvanced: boolean;              // indicates whether advanced options are currently shown.
+    formattedBasic?: string;            // caches the formatted output for the prompt without advanced options.
+    formattedBasicLines?: number;       // caches the number of lines rendered for the prompt without advanced options.
+    formattedAdvanced?: string;         // caches the formatted output for the prompt with advanced options.
+    formattedAdvancedLines?: number;    // caches the number of lines rendered for the prompt with advanced options.
 }
 
-function hasAdvancedOption(prompt: PromptState) {
+interface EvaluatedOption<R, S> {
+    option: Option<R, S>;                           // the original `Option` this was created from.
+    key: Key | readonly [Key, ...Key[]];            // the evaluated key for the option.
+    description: string;                            // the evaluated description for the option.
+    advanced?: boolean;                             // the evaluated value indicating whether the option is an advanced option.
+    disabled?: boolean;                             // the evaluated value indicating whether the option is disabled.
+    hidden?: boolean;                               // the evaluated value indicating whether the option is hidden.
+    checked?: boolean;                              // the evaluated value indicating whether the option is checked.
+    checkColor?: { color: chalk.ChalkFunction | undefined };
+    checkStyle?: "checkbox" | "radio";
+    formatted?: string;                             // caches the formatted output for the option.
+}
+
+function hasAdvancedOption(prompt: EvaluatedPrompt<any, any>) {
     if (prompt.hasAdvancedOption === undefined) {
-        prompt.hasAdvancedOption = prompt.options.some(opt => opt.advanced && !opt.disabled);
+        prompt.hasAdvancedOption = prompt.options.some(opt => opt.advanced && !opt.hidden);
     }
     return prompt.hasAdvancedOption;
+}
+
+function hasCheckedOption(prompt: EvaluatedPrompt<any, any>) {
+    if (prompt.hasCheckedOption === undefined) {
+        prompt.hasCheckedOption = prompt.options.some(opt => opt.checked !== undefined && !opt.hidden && (!opt.advanced || prompt.showAdvanced));
+    }
+    return prompt.hasCheckedOption;
 }
 
 const ctrlRegExp = /\bctrl[-+]/ig;
 const shiftRegExp = /\bshift[-+]/ig;
 const metaRegExp = /\b(alt|meta)[-+]/ig;
-const parseKeyCache = new Map<string, readline.Key>();
+const parseKeyCache = new Map<string, Key>();
 
+export interface Key {
+    name: string;
+    ctrl: boolean;
+    shift: boolean;
+    meta: boolean;
+}
+
+/**
+ * Parse a text like `ctrl+shift+s` into a `readline.Key`.
+ */
 function parseKey(text: string) {
     text = text.toLowerCase();
     let key = parseKeyCache.get(text);
     if (!key) {
         const withoutCtrl = text.replace(ctrlRegExp, "");
         const withoutShift = withoutCtrl.replace(shiftRegExp, "");
-        const withoutMeta = withoutShift.replace(metaRegExp, "");
-        const name = withoutMeta;
-        key = {
-            ctrl: withoutCtrl !== text,
-            shift: withoutShift !== withoutCtrl,
-            meta: withoutMeta !== withoutShift,
-            name: name === "esc" ? "escape" : name
-        };
+        let name = withoutShift.replace(metaRegExp, "");
+        const ctrl = withoutCtrl !== text;
+        const shift = withoutShift !== withoutCtrl;
+        const meta = name !== withoutShift;
+        if (name === "return") name = "enter";
+        if (name === "escape") name = "esc";
+        key = { name, ctrl, shift, meta };
         parseKeyCache.set(text, key);
     }
     return key;
 }
 
-const formatKeyCache = new Map<string, string>();
-
-function formatKey(option: Option) {
-    let key = isArray(option.key) ? option.key[0] : option.key;
-    if (typeof key === "string") key = parseKey(key);
-
-    const cacheKey = `${key.ctrl ? 1 : 0},${key.meta ? 1 : 0},${key.shift ? 1 : 0},${key.name ? key.name.toLowerCase() : ""}`;
-    let text = formatKeyCache.get(cacheKey);
-    if (text === undefined) {
-        text = "";
-        if (key.ctrl) text += "ctrl+";
-        if (key.meta) text += (process.platform === "win32" ? "alt+" : "meta+");
-        if (key.shift) text += "shift+";
-        switch (key.name) {
-            case undefined: break;
-            case "escape": text += "esc"; break;
-            default:
-                text += key.name;
-                break;
-        }
-        formatKeyCache.set(cacheKey, text);
-    }
+/**
+ * Format a prompt key.
+ */
+function formatKey(key: Key): string {
+    let text = "";
+    if (key.ctrl) text += "ctrl+";
+    if (key.meta) text += (process.platform === "win32" ? "alt+" : "meta+");
+    if (key.shift) text += "shift+";
+    text += key.name;
     return text;
 }
 
-function formatOption(option: OptionState) {
+function makeKey(name: string, { ctrl = false, shift = false, meta = false } = {}): Key {
+    return { name, ctrl, shift, meta };
+}
+
+function normalizeKey({ ctrl = false, shift = false, meta = false, sequence = "", name = sequence }: readline.Key): Key {
+    if (ctrl && name === "m") return makeKey("enter")
+    if (!ctrl && !shift && !meta && name === "enter") return makeKey("enter", { ctrl: true });
+    if (name === "escape") return makeKey("esc");
+    if (name === "return") name = "enter";
+    return { name, ctrl, shift, meta };
+}
+
+/**
+ * Tests whether an actual `PromptKey` is a match for an expected `PromptKey`.
+ * @param actual
+ * @param expected
+ */
+function matchKey(actual: string | Key, expected: string | Key | readonly [string | Key, ...(string | Key)[]]): boolean {
+    if (isArray(expected)) return expected.some(expected => matchKey(actual, expected));
+    if (typeof actual === "string") return matchKey(parseKey(actual), expected);
+    if (typeof expected === "string") return matchKey(actual, parseKey(expected));
+    return expected.name === actual.name
+        && expected.shift === actual.shift
+        && expected.ctrl === actual.ctrl
+        && expected.meta === actual.meta;
+}
+
+function formatChecked(checked: boolean | undefined, checkStyle: "checkbox" | "radio" | undefined, checkColor: chalk.ChalkFunction | undefined) {
+    switch (checkStyle) {
+        case "radio":
+            switch (checked) {
+                case true: return (checkColor ?? chalk.green)("ø ");
+                case false: return (checkColor ?? chalk.gray)("o ");
+            }
+            break;
+        case "checkbox":
+        default:
+            switch (checked) {
+                case true: return (checkColor ?? chalk.green)("✔ ");
+                case false: return (checkColor ?? chalk.red)("⨯ ");
+            }
+            break;
+    }
+    return "  ";
+}
+
+/**
+ * Formats a prompt options.
+ */
+function formatOption(option: EvaluatedOption<any, any>, prompt: EvaluatedPrompt<any, any>) {
     if (!option.formatted) {
-        option.formatted = ` > Press ${chalk.yellow(formatKey(option))} to ${option.description.replace(/\.$/, "")}.\n`;
+        const checked = hasCheckedOption(prompt) ? formatChecked(option.checked, option.checkStyle, option.checkColor?.color) : "";
+        const formatted = ` ${checked}> Press ${chalk.yellow(formatKey(isArray(option.key) ? option.key[0] : option.key))} to ${option.description.replace(/\.$/, "")}.\n`;
+        option.formatted = option.disabled ? chalk.gray(stripAnsi(formatted)) : formatted;
     }
     return option.formatted;
 }
 
-const quitOption: OptionState = {
-    key: [parseKey("q"), parseKey("ctrl+c"), parseKey("ctrl+d")],
-    description: "quit",
-    action: quit
-};
-
-function formatPrompt(prompt: PromptState) {
+/**
+ * Formats a prompt.
+ */
+function formatPrompt(prompt: EvaluatedPrompt<any, any>) {
     const key = prompt.showAdvanced ? "formattedAdvanced" : "formattedBasic";
     let text = prompt[key];
     if (text === undefined) {
@@ -124,18 +216,17 @@ function formatPrompt(prompt: PromptState) {
         }
         text += chalk.bold(`${prompt.title}:\n`);
         for (const option of prompt.options) {
-            if (option.disabled) continue;
+            if (option.hidden) continue;
             if (!option.advanced || prompt.showAdvanced) {
-                text += formatOption(option);
+                text += formatOption(option, prompt);
             }
         }
-        text += formatOption(quitOption);
         prompt[key] = text;
     }
     return text;
 }
 
-function countLines(prompt: PromptState) {
+function countLines(prompt: EvaluatedPrompt<any, any>) {
     const key = prompt.showAdvanced ? "formattedAdvancedLines" : "formattedBasicLines";
     let count = prompt[key];
     if (count === undefined) {
@@ -155,25 +246,33 @@ function isArray(value: unknown): value is readonly unknown[] {
     return Array.isArray(value);
 }
 
-function matchKey(actual: PromptKey, expected: PromptKey): boolean {
-    if (isArray(actual)) return actual.some(actual => matchKey(actual, expected));
-    if (isArray(expected)) return expected.some(expected => matchKey(actual, expected));
-    if (typeof actual === "string") actual = parseKey(actual);
-    if (typeof expected === "string") expected = parseKey(expected);
-    return (expected.name === "enter" ? "return" : expected.name) === (actual.name === "enter" ? "return" : actual.name)
-        && !!expected.shift === !!actual.shift
-        && !!expected.ctrl === !!actual.ctrl
-        && (!!expected.meta === !!actual.meta || expected.name === "escape");
-}
+const quitOption: Option<any, any> = {
+    key: ["q", "ctrl+c", "ctrl+d"],
+    description: "quit",
+    action: quit
+};
+
+const advancedOption: Option<any, any> = {
+    key: ["h", "?"],
+    description: context => `${context.showAdvanced ? "hide" : "show"} advanced options`,
+    action: (_, context) => {
+        if (currentPrompt?.prompt === context.prompt) {
+            hidePrompt();
+        }
+        context.showAdvanced = !context.showAdvanced;
+        if (currentPrompt?.prompt === context.prompt) {
+            refreshPrompt();
+            showPrompt();
+        }
+    }
+};
 
 const onQuitCallbacks: (() => void | Promise<void>)[] = [];
-
-export function addOnQuit(callback: () => void | Promise<void>) {
-    onQuitCallbacks.push(callback);
-}
-
 let quitPromise: Promise<void> | undefined;
 
+/**
+ * Performs cleanup of displayed prompts before exiting the process.
+ */
 export function quit() {
     if (quitPromise) return quitPromise;
     return quitPromise = (async () => {
@@ -181,7 +280,6 @@ export function quit() {
         unregisterOnKeypress();
         while (currentPrompt) {
             currentPrompt.visible = false;
-            currentPrompt.onCancel?.();
             currentPrompt = promptStack.pop();
         }
         let onQuit: (() => void | Promise<void>) | undefined;
@@ -200,44 +298,37 @@ export function quit() {
     })();
 }
 
-function onKeypress(ch: string, key: readline.Key) {
-    if (!key) key = parseKey(ch);
-    if (matchKey(key, { name: "q" }) ||
-        matchKey(key, { ctrl: true, name: "c" }) ||
-        matchKey(key, { ctrl: true, name: "d" })) {
+/**
+ * Registers a callback to be executed when `quit()` is called.
+ */
+export function addOnQuit(callback: () => void | Promise<void>) {
+    onQuitCallbacks.push(callback);
+}
+
+function onKeypress(ch: string | undefined, _key: readline.Key | undefined) {
+    const key = _key ? normalizeKey(_key) : ch ? makeKey(ch) : undefined;
+    if (!key) return;
+    if (matchKey(key, ["q", "ctrl+c", "ctrl+d"])) {
         quit();
         return;
     }
-    if (!currentPrompt) return;
 
+    if (!currentPrompt) return;
     const prompt = currentPrompt;
     if (!prompt.visible || prompt.keypressBlocked) return;
     prompt.keypressBlocked = true;
 
-    if (hasAdvancedOption(prompt) && (matchKey(key, { name: "h" }) || matchKey(key, { name: "?" }))) {
-        hidePrompt();
-        prompt.showAdvanced = !prompt.showAdvanced;
-        refreshPrompt();
-        showPrompt();
-        prompt.keypressBlocked = false;
-        return;
-    }
-
     for (const option of prompt.options) {
         if (!option.disabled && matchKey(key, option.key)) {
-            const result = option.action(key);
-            if (typeof result === "object") {
-                result.then(() => { prompt.keypressBlocked = false; });
+            const result = option.option.action(key, prompt.context);
+            if (result) {
+                Promise.resolve(result).then(() => { prompt.keypressBlocked = false; });
                 return;
             }
-            prompt.keypressBlocked = false;
-            return;
+            break;
         }
     }
 
-    readline.moveCursor(process.stdout, 0, -1);
-    readline.clearScreenDown(process.stdout);
-    console.log(`key: ${key.name}, ctrl: ${key.ctrl}, meta: ${key.meta}, shift: ${key.shift}`);
     prompt.keypressBlocked = false;
 }
 
@@ -273,18 +364,30 @@ function unregisterOnKeypress() {
     }
 }
 
+/**
+ * Determines whether there is an active prompt.
+ */
 export function hasPrompt() {
     return currentPrompt !== undefined;
 }
 
+/**
+ * Determines whether the active prompt is currently visible.
+ */
 export function isPromptVisible() {
     return !!currentPrompt?.visible;
 }
 
+/**
+ * Gets the active prompt.
+ */
 export function getCurrentPrompt() {
-    return currentPrompt?.source;
+    return currentPrompt?.prompt;
 }
 
+/**
+ * Make the active prompt visible.
+ */
 export function showPrompt() {
     if (currentPrompt && !currentPrompt.visible) {
         process.stdout.write(formatPrompt(currentPrompt) + "\n");
@@ -294,15 +397,21 @@ export function showPrompt() {
     return false;
 }
 
+/**
+ * Reevaluate and update the active prompt.
+ */
 export function refreshPrompt() {
     if (currentPrompt) {
         const wasVisible = isPromptVisible();
         if (wasVisible) hidePrompt();
-        updatePromptState(currentPrompt);
+        updatePrompt(currentPrompt);
         if (wasVisible) showPrompt();
     }
 }
 
+/**
+ * Makes the active prompt invisible.
+ */
 export function hidePrompt() {
     if (currentPrompt?.visible) {
         readline.moveCursor(process.stdout, 0, -countLines(currentPrompt));
@@ -313,109 +422,153 @@ export function hidePrompt() {
     return false;
 }
 
-function evaluate<T extends undefined | string | boolean>(value: T | (() => T)): T {
-    return typeof value === "function" ? value() : value;
+export type Evaluatable<T, R, S> = (context: PromptContext<R, S>) => T;
+
+type EvaluateConstraint<T> = { [P in keyof T]: P extends "call" | "apply" | "bind" ? never : T[P] };
+
+function evaluate<T extends EvaluateConstraint<T>, R, S>(value: T | Evaluatable<T, R, S>, context: PromptContext<R, S>): T {
+    return typeof value === "function" ? value(context) : value;
 }
 
-function updatePromptState(promptState: PromptState) {
-    const prompt = promptState.source;
-    promptState.header = evaluate(prompt.header);
-    promptState.title = evaluate(prompt.title);
-    promptState.options = prompt.options.map(opt => ({
-        ...opt,
-        description: evaluate(opt.description),
-        disabled: evaluate(opt.disabled),
-    }));
-    if (hasAdvancedOption(promptState)) {
-        const advancedOption: OptionState = {
-            key: [parseKey("h"), parseKey("?")],
-            description: `${promptState.showAdvanced ? "hide" : "show"} advanced options`,
-            action: () => {
-                if (currentPrompt === promptState) {
-                    hidePrompt();
+function evaluateOption<R, S>(option: Option<R, S>, context: PromptContext<R, S>): EvaluatedOption<R, S> {
+    const key = evaluate(option.key, context);
+    return {
+        option,
+        key: isArray(key) ? key.map(parseKey) as [Key, ...Key[]] : parseKey(key),
+        description: evaluate(option.description, context),
+        advanced: evaluate(option.advanced, context),
+        disabled: evaluate(option.disabled, context),
+        hidden: evaluate(option.hidden, context),
+        checked: evaluate(option.checked, context),
+        checkColor: evaluate(option.checkColor, context),
+        checkStyle: evaluate(option.checkStyle, context),
+    };
+}
+
+function updatePrompt<R, S>(evaluated: EvaluatedPrompt<R, S>) {
+    const prompt = evaluated.prompt;
+    evaluated.header = evaluate(prompt.header, evaluated.context);
+    evaluated.title = evaluate(prompt.title, evaluated.context);
+    evaluated.options = evaluate(prompt.options, evaluated.context).map(opt => evaluateOption(opt, evaluated.context));
+    if (hasAdvancedOption(evaluated)) {
+        evaluated.options.unshift(evaluateOption(advancedOption, evaluated.context));
+    }
+    evaluated.options.push(evaluateOption(quitOption, evaluated.context));
+    evaluated.formattedBasic = undefined;
+    evaluated.formattedBasicLines = undefined;
+    evaluated.formattedAdvanced = undefined;
+    evaluated.formattedAdvancedLines = undefined;
+}
+
+async function evaluatePrompt<R, S>(prompt: Prompt<R, S>): Promise<EvaluatedPrompt<R, S>> {
+    let resolve!: () => void;
+    let reject!: (reason: any) => void;
+    const promise = new Promise<void>((res, rej) => (resolve = res, reject = rej));
+    const state: Partial<S> = {};
+    const evaluated: EvaluatedPrompt<R, S> = {
+        prompt,
+        state,
+        context: {
+            prompt,
+            state,
+            get showAdvanced() { return !!evaluated.showAdvanced; },
+            set showAdvanced(value: boolean) { evaluated.showAdvanced = value; },
+
+            get result() { return evaluated.result; },
+            set result(value: R | undefined) { evaluated.result = value; },
+
+            show() {
+                if (evaluated === currentPrompt) {
+                    return showPrompt();
                 }
-                promptState.showAdvanced = !promptState.showAdvanced;
-                if (currentPrompt === promptState) {
+                else if (!evaluated.visible) {
+                    evaluated.visible = true;
+                    return true;
+                }
+                return false;
+            },
+            hide() {
+                if (evaluated === currentPrompt) {
+                    return hidePrompt();
+                } else if (evaluated.visible) {
+                    evaluated.visible = false;
+                    return true;
+                }
+                return false;
+            },
+            refresh() {
+                if (evaluated === currentPrompt) {
                     refreshPrompt();
-                    showPrompt();
+                } else {
+                    updatePrompt(evaluated);
+                }
+            },
+            close(result) {
+                if (result !== undefined) {
+                    this.result = result;
+                }
+                if (evaluated === currentPrompt) {
+                    popPrompt();
+                }
+                else {
+                    evaluated.closed = true;
                 }
             }
-        };
-        promptState.options.unshift(advancedOption);
-    }
-    promptState.formattedBasic = undefined;
-    promptState.formattedBasicLines = undefined;
-    promptState.formattedAdvanced = undefined;
-    promptState.formattedAdvancedLines = undefined;
-}
-
-function createPromptState(prompt: Prompt): PromptState {
-    let resolve!: () => void;
-    const promise = new Promise<void>(res => resolve = res);
-    const promptState: PromptState = {
-        source: prompt,
-        ...prompt,
+        },
         promise,
         resolve,
+        reject,
         header: undefined,
-        title: "",
-        options: [],
+        title: undefined!,
+        options: undefined!,
+        result: undefined,
+        showAdvanced: false,
         formattedBasic: undefined,
         formattedBasicLines: undefined,
         formattedAdvanced: undefined,
         formattedAdvancedLines: undefined
     };
-    updatePromptState(promptState);
-    return promptState;
+    await evaluated.prompt.onEnter?.(evaluated.context);
+    updatePrompt(evaluated);
+    return evaluated;
 }
 
-export function pushPrompt(prompt: Prompt) {
+/**
+ * Pushes a new prompt, returing a promise that is resolved when the prompt has closed.
+ */
+export async function pushPrompt<R, S>(prompt: Prompt<R, S>): Promise<R | undefined> {
     hidePrompt();
     if (currentPrompt !== undefined) {
         promptStack.push(currentPrompt);
     }
     else {
-        pause();
         registerOnKeypress();
     }
-    currentPrompt = createPromptState(prompt);
+    const thisPrompt = currentPrompt = await evaluatePrompt(prompt);
     showPrompt();
-    return currentPrompt.promise;
+    await thisPrompt.promise;
+    await thisPrompt.prompt.onExit?.(thisPrompt.context);
+    return thisPrompt.result;
 }
 
+/**
+ * Closes the current prompt and displays the previous prompt, if one exists.
+ */
 export function popPrompt() {
     hidePrompt();
-    currentPrompt?.resolve();
-    currentPrompt = promptStack.pop();
-    if (currentPrompt !== undefined) {
-        showPrompt();
-    }
-    else {
-        unpause();
-        unregisterOnKeypress();
-    }
-}
-
-let pauseCount = 0;
-let pausePromise = Promise.resolve();
-let pauseResolve = () => {};
-
-export function pause() {
-    if (pauseCount === 0) {
-        pausePromise = new Promise(resolve => pauseResolve = resolve);
-    }
-    pauseCount++;
-}
-
-export function unpause() {
-    if (pauseCount > 0) {
-        pauseCount--;
-        if (pauseCount === 0) {
-            pauseResolve();
+    if (currentPrompt) {
+        currentPrompt.closed = true;
+        currentPrompt.resolve();
+        currentPrompt = promptStack.pop();
+        while (currentPrompt?.closed) {
+            currentPrompt.resolve();
+            currentPrompt = promptStack.pop();
+        }
+        if (currentPrompt !== undefined) {
+            showPrompt();
+        }
+        else {
+            unregisterOnKeypress();
         }
     }
-}
-
-export function waitForPause() {
-    return pausePromise;
 }
