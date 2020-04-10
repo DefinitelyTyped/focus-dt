@@ -25,6 +25,8 @@ jobs:
     - name: Setup Node.js environment
       uses: actions/setup-node@v1.4.1
 
-    # Runs a single command using the runners shell
     - name: Run build
-      run: npm run build
+      run: |
+        npm install
+        npm run build
+        
