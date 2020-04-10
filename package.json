@@ -1,6 +1,6 @@
 {
   "name": "focus-dt",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A simple command-line tool for running down PRs on DefinitelyTyped",
   "bin": {
     "focus-dt": "bin/focus-dt"
