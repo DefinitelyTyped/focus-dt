@@ -28,7 +28,6 @@
   },
   "dependencies": {
     "@octokit/rest": "^16.28.1",
-    "@esfx/async-canceltoken": "1.0.0-pre.13",
     "equatable": "^1.2.0",
     "iterable-query": "^1.0.0-pre.15",
     "prompts": "^2.1.0",

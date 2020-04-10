@@ -14,14 +14,14 @@
    limitations under the License.
 */
 
-import { argv } from "./options";
-import prompts = require("prompts");
-import { ProjectService, Column, Card, Pull } from "./github";
-import { Chrome } from "./chrome";
-import chalk from "chalk";
 import * as readline from "readline";
 import * as fs from "fs";
-import { Prompt, pushPrompt, popPrompt, showPrompt, refreshPrompt, hidePrompt, addOnQuit, getCurrentPrompt } from "./prompt";
+import chalk from "chalk";
+import prompts = require("prompts");
+import { argv } from "./options";
+import { ProjectService, Column, Card, Pull } from "./github";
+import { Chrome } from "./chrome";
+import { Prompt, pushPrompt, addOnQuit } from "./prompt";
 
 function getRandomPort() {
     return 9000 + Math.floor(Math.random() * 999);
@@ -350,7 +350,7 @@ async function main() {
             },
             {
                 key: "n",
-                description: "approve PRs automatically when there are no other approvals.",
+                description: "approve PRs when merging if there are no other approvals.",
                 checked: ({ state }) => state.approvalMode === "auto",
                 checkStyle: "radio",
                 checkColor: ({ state }) => ({ color: state.approvalMode !== "auto" && approvalMode === "auto" ? chalk.yellow : undefined }),
@@ -361,7 +361,7 @@ async function main() {
             },
             {
                 key: "a",
-                description: "approve PRs automatically if you haven't already approved.",
+                description: "approve PRs when merging if you haven't already approved.",
                 checked: ({ state }) => state.approvalMode === "always",
                 checkStyle: "radio",
                 checkColor: ({ state }) => ({ color: state.approvalMode !== "always" && approvalMode === "always" ? chalk.yellow : undefined }),

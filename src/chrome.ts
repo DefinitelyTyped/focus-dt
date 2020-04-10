@@ -1,4 +1,3 @@
-import { CancelToken } from "@esfx/async-canceltoken";
 import { regQuery } from "./registry";
 import { spawn, ChildProcess } from "child_process";
 import { chromeConnection } from "vscode-chrome-debug-core";
