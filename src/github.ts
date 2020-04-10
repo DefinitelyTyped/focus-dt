@@ -13,7 +13,8 @@ export interface Project extends Github.ProjectsListForRepoResponseItem {}
 export interface Column extends Github.ProjectsListColumnsResponseItem {}
 export interface Card extends Github.ProjectsListCardsResponseItem {}
 export interface Pull extends Github.PullsGetResponse {
-    approved?: boolean;
+    approvedByMe?: boolean;
+    approvedByAll?: boolean;
 }
 
 export interface GetPullSuccessResult {
@@ -124,9 +125,9 @@ export class ProjectService<K extends string = "Check and Merge" | "Review"> {
             ...this._ownerAndRepo,
             pull_number: pull.number
         });
-        const review = reviews.data?.find(review => review.user.id === id);
-        const approved = review?.state === "APPROVED";
-        return { error: false, pull: { ...pull, approved }, labels };
+        const approvedByAll = (reviews.data?.length > 0 && reviews.data.every(review => review.state === "APPROVED")) ?? false;
+        const approvedByMe = reviews.data?.some(review => review.user.id === id && review.state === "APPROVED") ?? false;
+        return { error: false, pull: { ...pull, approvedByMe, approvedByAll }, labels };
     }
 
     async whoAmiI(): Promise<number | undefined> {
@@ -140,18 +141,38 @@ export class ProjectService<K extends string = "Check and Merge" | "Review"> {
         return this._userId;
     }
 
-    async approvePull(pull: Pull): Promise<void> {
-        const auth = await this._github.users.getAuthenticated();
-        if (!auth.data) {
-            return;
+    async isApprovedByAll(pull: Pull): Promise<boolean> {
+        const reviews = await this._github.pulls.listReviews({ ...this._ownerAndRepo, pull_number: pull.number });
+        let wasApproved = false;
+        if (reviews.data) {
+            for (const review of reviews.data) {
+                if (review.state === "APPROVED") {
+                    wasApproved = true;
+                }
+                else {
+                    return false;
+                }
+            }
         }
+        return wasApproved;
+    }
 
-        const id = auth.data.id;
+    async isApprovedByMe(pull: Pull): Promise<boolean> {
+        const id = await this.whoAmiI();
         const reviews = await this._github.pulls.listReviews({ ...this._ownerAndRepo, pull_number: pull.number });
         if (reviews.data) {
             for (const review of reviews.data) {
-                if (review.user.id === id && review.state === "APPROVED") return;
+                if (review.state === "APPROVED" && review.user.id === id) {
+                    return true;
+                }
             }
+        }
+        return false;
+    }
+
+    async approvePull(pull: Pull): Promise<void> {
+        if (await this.isApprovedByMe(pull)) {
+            return;
         }
 
         const review = await this._github.pulls.createReview({
@@ -167,7 +188,8 @@ export class ProjectService<K extends string = "Check and Merge" | "Review"> {
             review_id: review.data.id
         });
 
-        pull.approved = true;
+        pull.approvedByMe = await this.isApprovedByMe(pull);
+        pull.approvedByAll = await this.isApprovedByAll(pull);
     }
 
     async mergePull(pull: Pull, method?: "merge" | "squash" | "rebase"): Promise<void> {

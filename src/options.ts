@@ -18,9 +18,9 @@ import yargs = require("yargs");
 
 export const options = yargs
     .option("token", {
-        desc: "GitHub Auth Token",
+        desc: "GitHub Auth Token. Uses %GITHUB_API_TOKEN%, %FOCUS_DT_GITHUB_API_TOKEN%, or %AUTH_TOKEN% (in that order) if available.",
         conflicts: ["username", "password"],
-        type: "string"
+        type: "string",
     })
     .option("username", {
         desc: "GitHub Username",
@@ -69,6 +69,16 @@ export const options = yargs
         desc: "Set the default merge option to one of 'merge', 'squash', or 'rebase'.",
         type: "string",
         choices: ["merge", "squash", "rebase", undefined]
+    })
+    .option("approve", {
+        desc: 
+            "Sets the approval option to one of 'manual', 'auto', or 'always' (default 'manual').\n" +
+            "  'manual' - Manually approve PRs in the CLI.\n" + 
+            "  'auto' - Approve PRs when merging if they have no other approvers.\n" +
+            "  'always' - Approve PRs when merging if you haven't already approved.",
+        type: "string",
+        choices: ["manual", "auto", "always"],
+        default: "manual"
     })
     .option("verbose", {
         desc: "Increases the log level",
