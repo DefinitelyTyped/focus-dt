@@ -485,8 +485,8 @@ async function main() {
         },
         owner: "DefinitelyTyped",
         repo: "DefinitelyTyped",
-        project: "Pull Request Status Board",
-        columns: ["Check and Merge", "Review"],
+        project: "New Pull Request Status Board",
+        columns: ["Needs Maintainer Review", "Other"],
     });
 
     const project = await service.getProject();
@@ -516,11 +516,11 @@ async function main() {
     while (true) {
         currentPull = undefined;
         if (checkAndMerge && shouldPopulateState(checkAndMergeState)) {
-            checkAndMergeState = await populateState(columns["Check and Merge"]);
+            checkAndMergeState = await populateState(columns["Needs Maintainer Review"]);
         }
 
         if (review && shouldPopulateState(reviewState)) {
-            reviewState = await populateState(columns["Review"]);
+            reviewState = await populateState(columns["Other"]);
         }
 
         if (lastShowCheckAndMerge !== checkAndMerge || lastShowReview !== review) {

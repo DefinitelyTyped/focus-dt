@@ -6,9 +6,9 @@ import Registry = require("winreg");
 import { EventEmitter } from "events";
 
 const defaultChromePaths: Partial<Record<NodeJS.Platform, string[]>> = {
-    win32: ["C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"],
+    win32: ["C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe", "C:\Program Files (x86)\Microsoft\Edge Beta\Application\msedge.exe"],
     darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
-    linux: ["/usr/bin/google-chrome"],
+    linux: ["/usr/bin/google-chrome", "/mnt/c/Program Files (x86)/Microsoft/Edge Beta/Application/msedge.exe"],
 };
 
 const indexUrl = `file:///${require.resolve("../assets/index.html").replace(/\\/g, "/").replace(/^\//, "")}`;

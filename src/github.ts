@@ -31,7 +31,7 @@ export interface GetPullFailureResult {
 export type GetPullResult = GetPullSuccessResult | GetPullFailureResult;
 
 export class ProjectService<K extends string = "Check and Merge" | "Review"> {
-    static readonly defaultProject = "Pull Request Status Board";
+    static readonly defaultProject = "New Pull Request Status Board";
     static readonly defaultColumns = ["Check and Merge", "Review"] as const;
 
     private _github: Github;
