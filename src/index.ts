@@ -181,7 +181,7 @@ async function main() {
                 key: "a",
                 description: "approve",
                 disabled: () => !!currentPull?.approvedByMe,
-                hidden: () => settings.approve !== "manual",
+                hidden: () => settings.approve !== "manual" && settings.approve !== "only",
                 action: async (_, context) => {
                     if (!currentPull) return;
                     context.hide();
