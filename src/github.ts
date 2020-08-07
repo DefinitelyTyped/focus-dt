@@ -15,6 +15,7 @@ export interface Card extends Github.ProjectsListCardsResponseItem {}
 export interface Pull extends Github.PullsGetResponse {
     approvedByMe?: boolean;
     approvedByAll?: boolean;
+    botStatus?: string[];
 }
 
 export interface GetPullSuccessResult {
@@ -30,9 +31,10 @@ export interface GetPullFailureResult {
 
 export type GetPullResult = GetPullSuccessResult | GetPullFailureResult;
 
-export class ProjectService<K extends string = "Check and Merge" | "Review"> {
-    static readonly defaultProject = "Pull Request Status Board";
-    static readonly defaultColumns = ["Check and Merge", "Review"] as const;
+// TODO: Make this configurable or something because we keep changing it...
+export class ProjectService<K extends string = "Needs Maintainer Review" | "Needs Maintainer Action"> {
+    static readonly defaultProject = "New Pull Request Status Board";
+    static readonly defaultColumns = ["Needs Maintainer Review", "Needs Maintainer Action"] as const;
 
     private _github: Github;
     private _project: string;
@@ -125,9 +127,34 @@ export class ProjectService<K extends string = "Check and Merge" | "Review"> {
             ...this._ownerAndRepo,
             pull_number: pull.number
         });
+
+        // Search for the typescript-bot comment
+        const comments = await this._github.issues.listComments({
+            ...this._ownerAndRepo,
+            issue_number: pull.number
+        });
+
+        // TODO: Make this configurable as well
+        const botComment = comments.data.find(comment => 
+            comment.user.login === "typescript-bot" &&
+            /<!--typescript_bot_welcome-->/i.test(comment.body)
+        )
+
+        let botStatus: string[] | undefined;
+        const body = botComment?.body;
+        if (body) {
+            const match = /## Status(?:\r?\n)+((?:\s\*.*?(?:\r?\n))*)/.exec(body);
+            if (match) {
+                botStatus = match[1]
+                    .replace(/\[(.*?)\]\(.*?\)/, (_, s) => s)
+                    .split(/\r?\n/g)
+                    .map(s => ' ' + s.trim());
+            }
+        }
+
         const approvedByAll = (reviews.data?.length > 0 && reviews.data.every(review => review.state === "APPROVED")) ?? false;
         const approvedByMe = reviews.data?.some(review => review.user.id === id && review.state === "APPROVED") ?? false;
-        return { error: false, pull: { ...pull, approvedByMe, approvedByAll }, labels };
+        return { error: false, pull: { ...pull, approvedByMe, approvedByAll, botStatus }, labels };
     }
 
     async whoAmiI(): Promise<number | undefined> {

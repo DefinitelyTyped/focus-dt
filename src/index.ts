@@ -16,37 +16,42 @@
 
 import * as readline from "readline";
 import * as fs from "fs";
+import * as os from "os";
 import chalk from "chalk";
 import prompts = require("prompts");
 import { argv } from "./options";
 import { ProjectService, Column, Card, Pull } from "./github";
 import { Chrome } from "./chrome";
 import { Prompt, pushPrompt, addOnQuit } from "./prompt";
+import { getDefaultSettings, getDefaultSettingsFile, saveSettings, Settings } from "./settings";
 
 function getRandomPort() {
     return 9000 + Math.floor(Math.random() * 999);
 }
 
 async function init() {
+    const defaults = getDefaultSettings();
     let {
         token,
         username,
         password,
-        review = false,
-        checkAndMerge = false,
-        draft = false,
-        oldest = false,
-        approve = "manual",
-        merge,
-        port = 9222,
-        timeout = 10000,
+        save,
+        "save-to": saveTo,
+        needsReview = defaults.needsReview,
+        needsAction = defaults.needsAction,
+        draft = defaults.draft,
+        oldest = defaults.oldest,
+        approve = defaults.approve,
+        merge = defaults.merge,
+        port = defaults.port,
+        timeout = defaults.timeout,
     } = argv;
 
-    if (port <= 0) port = getRandomPort();
+    if (port <= 0) port = "random";
 
-    if (!review && !checkAndMerge) {
-        review = true;
-        checkAndMerge = true;
+    if (!needsReview && !needsAction) {
+        needsReview = true;
+        needsAction = true;
     }
 
     if (!token) {
@@ -85,21 +90,31 @@ async function init() {
     const defaultMerge: "merge" | "squash" | "rebase" | undefined =
         merge === "merge" || merge === "squash" || merge === "rebase" ? merge : undefined;
 
-    const approvalMode: "manual" | "auto" | "always" =
-        approve === "manual" || approve === "auto" || approve === "always" ? approve : "manual";
+    const approvalMode: "manual" | "auto" | "always" | "only" =
+        approve === "manual" || approve === "auto" || approve === "always" || approve === "only" ? approve : "manual";
+
+    const settings: Settings = {
+        needsAction,
+        needsReview,
+        oldest,
+        draft,
+        port,
+        timeout,
+        merge: defaultMerge,
+        approve: approvalMode
+    };
+
+    if (save || saveTo) {
+        saveSettings(settings, saveTo);
+        console.log(`Settings saved to '${saveTo ?? getDefaultSettingsFile()}'.`);
+        process.exit(0);
+    }
 
     return {
         token,
         username,
         password,
-        review,
-        checkAndMerge,
-        defaultMerge,
-        approvalMode,
-        draft,
-        oldest,
-        port,
-        timeout
+        settings
     };
 }
 
@@ -108,14 +123,7 @@ async function main() {
         token,
         username,
         password,
-        review,
-        checkAndMerge,
-        defaultMerge,
-        approvalMode,
-        draft,
-        oldest,
-        port,
-        timeout,
+        settings
     } = await init();
 
     if (!token && (!username || !password)) {
@@ -159,10 +167,21 @@ async function main() {
                 }
             },
             {
+                key: "ctrl+s",
+                description: "save current configuration options as defaults",
+                advanced: true,
+                action: async (_, context) => {
+                    context.hide();
+                    saveSettings(settings);
+                    process.stdout.write("Configuration saved.\n\n");
+                    context.show();
+                }
+            },
+            {
                 key: "a",
                 description: "approve",
                 disabled: () => !!currentPull?.approvedByMe,
-                hidden: () => approvalMode !== "manual",
+                hidden: () => settings.approve !== "manual",
                 action: async (_, context) => {
                     if (!currentPull) return;
                     context.hide();
@@ -170,31 +189,39 @@ async function main() {
                     await service.approvePull(currentPull);
                     process.stdout.write("Approved.\n\n");
                     log.write(`[${new Date().toISOString()}] #${currentPull.number} '${currentPull.title}': Approved\n`);
-                    context.refresh();
-                    context.show();
+
+                    if (settings.approve === "only") {
+                        context.close();
+                    }
+                    else {
+                        context.refresh();
+                        context.show();
+                    }
                 }
             },
             {
                 key: "m",
-                description: () => `${(approvalMode === "auto" ? !currentPull?.approvedByAll : approvalMode === "always" ? !currentPull?.approvedByMe : false) ? "approve and " : ""}merge${defaultMerge ? ` using ${defaultMerge === "merge" ? "merge commit" : defaultMerge}` : ""}`,
+                description: () => `${(settings.approve === "auto" ? !currentPull?.approvedByAll : settings.approve === "always" ? !currentPull?.approvedByMe : false) ? "approve and " : ""}merge${settings.merge ? ` using ${settings.merge === "merge" ? "merge commit" : settings.merge}` : ""}`,
+                disabled: () => settings.approve === "only",
+                hidden: () => settings.approve === "only",
                 action: async (_, context) => {
                     if (!currentPull) return;
 
                     const pull = currentPull;
-                    if (!defaultMerge) {
+                    if (!settings.merge) {
                         const result = await pushPrompt(mergePrompt);
                         if (result) {
                             context.refresh();
                         }
-                        if (!defaultMerge) return;
+                        if (!settings.merge) return;
                     }
 
                     context.hide();
 
-                    const merge = defaultMerge;
+                    const merge = settings.merge;
                     const needsApproval =
-                        approvalMode === "auto" ? !await service.isApprovedByAll(pull) :
-                        approvalMode === "always" ? !await service.isApprovedByMe(pull) :
+                        settings.approve === "auto" ? !await service.isApprovedByAll(pull) :
+                        settings.approve === "always" ? !await service.isApprovedByMe(pull) :
                         false;
 
                     if (needsApproval) {
@@ -232,15 +259,15 @@ async function main() {
     const filterPrompt: Prompt<boolean, FilterPromptState> = {
         title: "Filter Options",
         onEnter: ({ state }) => {
-            state.checkAndMerge = checkAndMerge;
-            state.review = review;
-            state.draft = draft;
-            state.oldest = oldest;
+            state.checkAndMerge = settings.needsAction;
+            state.review = settings.needsReview;
+            state.draft = settings.draft;
+            state.oldest = settings.oldest;
         },
         options: [
             {
                 key: "c",
-                description: ({ state }) => `${(state.checkAndMerge !== checkAndMerge ? chalk.yellow : chalk.reset)(state.checkAndMerge ? "exclude" : "include")} 'Check and Merge' column`,
+                description: ({ state }) => `${(state.checkAndMerge !== settings.needsAction ? chalk.yellow : chalk.reset)(state.checkAndMerge ? "exclude" : "include")} 'Check and Merge' column`,
                 checked: ({ state }) => state.checkAndMerge,
                 checkStyle: "checkbox",
                 action: (_, context) => {
@@ -250,7 +277,7 @@ async function main() {
             },
             {
                 key: "r",
-                description: ({ state }) => `${(state.review !== review ? chalk.yellow : chalk.reset)(state.review ? "exclude" : "include")} 'Review' column`,
+                description: ({ state }) => `${(state.review !== settings.needsReview ? chalk.yellow : chalk.reset)(state.review ? "exclude" : "include")} 'Review' column`,
                 checkStyle: "checkbox",
                 checked: ({ state }) => state.review,
                 action: (_, context) => {
@@ -260,7 +287,7 @@ async function main() {
             },
             {
                 key: "d",
-                description: ({ state }) => `${(state.draft !== draft ? chalk.yellow : chalk.reset)(state.draft ? "exclude" : "include")} Draft PRs`,
+                description: ({ state }) => `${(state.draft !== settings.draft ? chalk.yellow : chalk.reset)(state.draft ? "exclude" : "include")} Draft PRs`,
                 checkStyle: "checkbox",
                 checked: ({ state }) => state.draft,
                 action: (_, context) => {
@@ -270,7 +297,7 @@ async function main() {
             },
             {
                 key: "o",
-                description: ({ state }) => `order by ${(state.oldest !== oldest ? chalk.yellow : chalk.reset)(state.oldest ? "newest" : "oldest")}`,
+                description: ({ state }) => `order by ${(state.oldest !== settings.oldest ? chalk.yellow : chalk.reset)(state.oldest ? "newest" : "oldest")}`,
                 checkStyle: "checkbox",
                 checked: ({ state }) => state.oldest,
                 action: (_, context) => {
@@ -282,32 +309,32 @@ async function main() {
                 key: "enter",
                 description: "accept changes",
                 disabled: ({ state }) =>
-                    !!state.checkAndMerge === checkAndMerge &&
-                    !!state.review === review &&
-                    !!state.draft === draft &&
-                    !!state.oldest === oldest,
+                    !!state.checkAndMerge === settings.needsAction &&
+                    !!state.review === settings.needsReview &&
+                    !!state.draft === settings.draft &&
+                    !!state.oldest === settings.oldest,
                 action: (_, context) => {
                     let shouldReset = false;
                     const { state } = context;
-                    if (!!state.checkAndMerge !== checkAndMerge) {
-                        checkAndMerge = !!state.checkAndMerge;
-                        checkAndMergeState = undefined;
+                    if (!!state.checkAndMerge !== settings.needsAction) {
+                        settings.needsAction = !!state.checkAndMerge;
+                        otherState = undefined;
                         shouldReset = true;
                     }
-                    if (!!state.review !== review) {
-                        review = !!state.review;
+                    if (!!state.review !== settings.needsReview) {
+                        settings.needsReview = !!state.review;
                         reviewState = undefined;
                         shouldReset = true;
                     }
-                    if (!!state.draft !== draft) {
-                        draft = !!state.draft;
-                        checkAndMergeState = undefined;
+                    if (!!state.draft !== settings.draft) {
+                        settings.draft = !!state.draft;
+                        otherState = undefined;
                         reviewState = undefined;
                         shouldReset = true;
                     }
-                    if (!!state.oldest !== oldest) {
-                        oldest = !!state.oldest;
-                        checkAndMergeState = undefined;
+                    if (!!state.oldest !== settings.oldest) {
+                        settings.oldest = !!state.oldest;
+                        otherState = undefined;
                         reviewState = undefined;
                         shouldReset = true;
                     }
@@ -328,13 +355,13 @@ async function main() {
     };
 
     interface ApprovalPromptState {
-        approvalMode: "manual" | "auto" | "always";
+        approvalMode: "manual" | "auto" | "always" | "only";
     }
 
     const approvalPrompt: Prompt<boolean, ApprovalPromptState> = {
         title: "Approval Options",
         onEnter: ({ state }) => {
-            state.approvalMode = approvalMode;
+            state.approvalMode = settings.approve;
         },
         options: [
             {
@@ -342,9 +369,20 @@ async function main() {
                 description: "approve PRs manually.",
                 checked: ({ state }) => state.approvalMode === "manual",
                 checkStyle: "radio",
-                checkColor: ({ state }) => ({ color: state.approvalMode !== "manual" && approvalMode === "manual" ? chalk.yellow : undefined }),
+                checkColor: ({ state }) => ({ color: state.approvalMode !== "manual" && settings.approve === "manual" ? chalk.yellow : undefined }),
                 action: (_, context) => {
                     context.state.approvalMode = "manual";
+                    context.refresh();
+                }
+            },
+            {
+                key: "o",
+                description: "approve PRs manually and advance (disables merge).",
+                checked: ({ state }) => state.approvalMode === "only",
+                checkStyle: "radio",
+                checkColor: ({ state }) => ({ color: state.approvalMode !== "only" && settings.approve === "only" ? chalk.yellow : undefined }),
+                action: (_, context) => {
+                    context.state.approvalMode = "only";
                     context.refresh();
                 }
             },
@@ -353,7 +391,7 @@ async function main() {
                 description: "approve PRs when merging if there are no other approvals.",
                 checked: ({ state }) => state.approvalMode === "auto",
                 checkStyle: "radio",
-                checkColor: ({ state }) => ({ color: state.approvalMode !== "auto" && approvalMode === "auto" ? chalk.yellow : undefined }),
+                checkColor: ({ state }) => ({ color: state.approvalMode !== "auto" && settings.approve === "auto" ? chalk.yellow : undefined }),
                 action: (_, context) => {
                     context.state.approvalMode = "auto";
                     context.refresh();
@@ -364,7 +402,7 @@ async function main() {
                 description: "approve PRs when merging if you haven't already approved.",
                 checked: ({ state }) => state.approvalMode === "always",
                 checkStyle: "radio",
-                checkColor: ({ state }) => ({ color: state.approvalMode !== "always" && approvalMode === "always" ? chalk.yellow : undefined }),
+                checkColor: ({ state }) => ({ color: state.approvalMode !== "always" && settings.approve === "always" ? chalk.yellow : undefined }),
                 action: (_, context) => {
                     context.state.approvalMode = "always";
                     context.refresh();
@@ -373,11 +411,11 @@ async function main() {
             {
                 key: "enter",
                 description: "accept changes",
-                disabled: ({ state }) => state.approvalMode === approvalMode,
+                disabled: ({ state }) => state.approvalMode === settings.approve,
                 action: (_, context) => {
-                    const oldApprovalMode = approvalMode;
-                    approvalMode = context.state.approvalMode ?? approvalMode;
-                    context.close(approvalMode !== oldApprovalMode);
+                    const oldApprovalMode = settings.approve;
+                    settings.approve = context.state.approvalMode ?? settings.approve;
+                    context.close(settings.approve !== oldApprovalMode);
                 }
             },
             {
@@ -395,7 +433,7 @@ async function main() {
     const mergePrompt: Prompt<boolean, MergePromptState> = {
         title: "Merge Options",
         onEnter: ({ state }) => {
-            state.defaultMerge = defaultMerge;
+            state.defaultMerge = settings.merge;
         },
         options: [
             {
@@ -403,7 +441,7 @@ async function main() {
                 description: "merge using merge commit",
                 checked: ({ state }) => state.defaultMerge === "merge",
                 checkStyle: "radio",
-                checkColor: ({ state }) => ({ color: state.defaultMerge !== "merge" && defaultMerge === "merge" ? chalk.yellow : undefined }),
+                checkColor: ({ state }) => ({ color: state.defaultMerge !== "merge" && settings.merge === "merge" ? chalk.yellow : undefined }),
                 action: (_, context) => {
                     context.state.defaultMerge = "merge";
                     context.refresh();
@@ -414,7 +452,7 @@ async function main() {
                 description: "merge using squash",
                 checkStyle: "radio",
                 checked: ({ state }) => state.defaultMerge === "squash",
-                checkColor: ({ state }) => ({ color: state.defaultMerge !== "squash" && defaultMerge === "squash" ? chalk.yellow : undefined }),
+                checkColor: ({ state }) => ({ color: state.defaultMerge !== "squash" && settings.merge === "squash" ? chalk.yellow : undefined }),
                 action: (_, context) => {
                     context.state.defaultMerge = "squash";
                     context.refresh();
@@ -425,7 +463,7 @@ async function main() {
                 description: "merge using rebase",
                 checkStyle: "radio",
                 checked: ({ state }) => state.defaultMerge === "rebase",
-                checkColor: ({ state }) => ({ color: state.defaultMerge !== "rebase" && defaultMerge === "rebase" ? chalk.yellow : undefined }),
+                checkColor: ({ state }) => ({ color: state.defaultMerge !== "rebase" && settings.merge === "rebase" ? chalk.yellow : undefined }),
                 action: (_, context) => {
                     context.state.defaultMerge = "rebase";
                     context.refresh();
@@ -436,7 +474,7 @@ async function main() {
                 description: "clear default merge option",
                 checkStyle: "radio",
                 checked: ({ state }) => state.defaultMerge === undefined,
-                checkColor: ({ state }) => ({ color: state.defaultMerge !== undefined && defaultMerge === undefined ? chalk.yellow : undefined }),
+                checkColor: ({ state }) => ({ color: state.defaultMerge !== undefined && settings.merge === undefined ? chalk.yellow : undefined }),
                 action: (_, context) => {
                     context.state.defaultMerge = undefined;
                     context.refresh();
@@ -445,11 +483,11 @@ async function main() {
             {
                 key: "enter",
                 description: "accept changes",
-                disabled: ({ state }) => state.defaultMerge === defaultMerge,
+                disabled: ({ state }) => state.defaultMerge === settings.merge,
                 action: (_, context) => {
-                    const oldDefaultMerge = defaultMerge;
-                    defaultMerge = context.state.defaultMerge;
-                    context.close(defaultMerge !== oldDefaultMerge);
+                    const oldDefaultMerge = settings.merge;
+                    settings.merge = context.state.defaultMerge;
+                    context.close(settings.merge !== oldDefaultMerge);
                 }
             },
             {
@@ -460,7 +498,7 @@ async function main() {
         ]
     };
 
-    const chrome = new Chrome(port, timeout);
+    const chrome = new Chrome(settings.port === "random" ? getRandomPort() : settings.port, settings.timeout);
     const log = fs.createWriteStream("focus-dt.log", { flags: "a" });
 
     addOnQuit(() => {
@@ -485,12 +523,114 @@ async function main() {
         },
         owner: "DefinitelyTyped",
         repo: "DefinitelyTyped",
-        project: "Pull Request Status Board",
-        columns: ["Check and Merge", "Review"],
     });
 
     const project = await service.getProject();
     const columns = await service.getColumns(project);
+
+    class Screen {
+        private headerLines: string[] = [];
+        private logLines: string[] = [];
+        private progressLines: string[] = [];
+        private pullLines: string[] = [];
+        private writtenHeaderLines: string[] = [];
+        private writtenLogLines: string[] = [];
+        private writtenProgressLines: string[] = [];
+        private writtenPullLines: string[] = [];
+
+        get headerStart() {
+            return 0;
+        }
+
+        get progressStart() {
+            return this.headerStart + this.writtenHeaderLines.length;
+        }
+
+        get logStart() {
+            return this.progressStart + this.writtenProgressLines.length;
+        }
+
+        get pullStart() {
+            return this.logStart + this.writtenLogLines.length;
+        }
+
+        clearHeader() {
+            this.headerLines.length = 0;
+            this.progressLines.length = 0;
+            this.logLines.length = 0;
+            this.pullLines.length = 0;
+            this.writtenProgressLines.length = 0;
+            this.writtenLogLines.length = 0;
+            this.writtenPullLines.length = 0;
+        }
+
+        clearProgress() {
+            this.logLines.length = 0;
+            this.pullLines.length = 0;
+            this.writtenLogLines.length = 0;
+            this.writtenPullLines.length = 0;
+        }
+
+        clearLog() {
+            this.logLines.length = 0;
+            this.pullLines.length = 0;
+            this.writtenPullLines.length = 0;
+        }
+
+        clearPull() {
+            this.pullLines.length = 0;
+        }
+
+        addProgress(line: string = "") {
+            this.progressLines.push(...line.split(/\r?\n/g));
+        }
+
+        addHeader(line: string = "") {
+            this.headerLines.push(...line.split(/\r?\n/g));
+        }
+
+        addLog(line: string = "") {
+            this.logLines.push(...line.split(/\r?\n/g));
+        }
+
+        addPull(line: string = "") {
+            this.pullLines.push(...line.split(/\r?\n/g));
+        }
+
+        private writeLines(y: number, source: string[], written: string[]) {
+            let i = 0;
+            while (i < source.length && i < written.length && source[i] === written[i]) {
+                i++;
+            }
+            if (written.length > i) {
+                written.length = i;
+            }
+            readline.cursorTo(process.stdout, 0, y + i);
+            readline.clearScreenDown(process.stdout);
+            while (i < source.length) {
+                const s = source[i];
+                process.stdout.write(s + "\n");
+                written.push(s);
+                i++;
+            }
+        }
+
+        writeHeader() {
+            this.writeLines(this.headerStart, this.headerLines, this.writtenHeaderLines);
+        }
+
+        writeProgress() {
+            this.writeLines(this.progressStart, this.progressLines, this.writtenProgressLines);
+        }
+
+        writeLog() {
+            this.writeLines(this.logStart, this.logLines, this.writtenLogLines);
+        }
+
+        writePull() {
+            this.writeLines(this.pullStart, this.pullLines, this.writtenPullLines);
+        }
+    }
 
     interface ColumnRunDownState {
         column: Column;
@@ -504,90 +644,92 @@ async function main() {
         card: Card;
     }
 
-    let checkAndMergeState: ColumnRunDownState | undefined;
+    let otherState: ColumnRunDownState | undefined;
     let reviewState: ColumnRunDownState | undefined;
     let workArea: WorkArea | undefined;
     let currentPull: Pull | undefined;
     let lastColumn: Column | undefined;
-    let lastShowCheckAndMerge = false;
+    let lastShowOther = false;
     let lastShowReview = false;
-    let shouldClear = true;
+
+    const screen = new Screen();
 
     while (true) {
         currentPull = undefined;
-        if (checkAndMerge && shouldPopulateState(checkAndMergeState)) {
-            checkAndMergeState = await populateState(columns["Check and Merge"]);
+        if (settings.needsAction && shouldPopulateState(otherState)) {
+            otherState = await populateState(columns["Needs Maintainer Action"]);
         }
 
-        if (review && shouldPopulateState(reviewState)) {
-            reviewState = await populateState(columns["Review"]);
+        if (settings.needsReview && shouldPopulateState(reviewState)) {
+            reviewState = await populateState(columns["Needs Maintainer Review"]);
         }
 
-        if (lastShowCheckAndMerge !== checkAndMerge || lastShowReview !== review) {
-            lastShowCheckAndMerge = checkAndMerge;
-            lastShowReview = review;
-            readline.cursorTo(process.stdout, 0, 0);
-            readline.clearScreenDown(process.stdout);
-            console.log(`'Check and Merge' ${checkAndMergeState ? `count: ${checkAndMergeState.cards.length}` : "excluded."}`);
-            console.log(`'Review' ${reviewState ? `count: ${reviewState.cards.length}` : "excluded."}`);
-            console.log();
+        if (lastShowOther !== settings.needsAction || lastShowReview !== settings.needsReview) {
+            lastShowOther = settings.needsAction;
+            lastShowReview = settings.needsReview;
+            screen.clearHeader();
+            screen.addHeader(`'Needs Maintainer Review' ${reviewState ? `count: ${reviewState.cards.length}` : "excluded."}`);
+            screen.addHeader(`'Needs Maintainer Action' ${otherState ? `count: ${otherState.cards.length}` : "excluded."}`);
+            screen.addHeader(`order by: ${settings.oldest ? "oldest" : "newest"} first`);
+            screen.addHeader();
+            screen.writeHeader();
         }
 
-        workArea = nextCard(checkAndMergeState) || nextCard(reviewState);
+        workArea = nextCard(reviewState) || nextCard(otherState);
         if (!workArea) {
             lastColumn = undefined;
-            if (shouldClear) {
-                readline.cursorTo(process.stdout, 0, 3);
-                readline.clearScreenDown(process.stdout);
-            }
-
-            console.log("No items remaining.");
+            screen.clearProgress();
+            screen.addProgress("No items remaining.");
+            screen.writeProgress();
         }
         else {
             const { column, card } = workArea;
             if (column.column !== lastColumn) {
                 lastColumn = column.column;
-                if (shouldClear) {
-                    readline.cursorTo(process.stdout, 0, 3);
-                    readline.clearScreenDown(process.stdout);
-                }
-                console.log(`Column '${column.column.name}':`);
-                console.log();
-            } else if (shouldClear) {
-                readline.cursorTo(process.stdout, 0, 5);
-                readline.clearScreenDown(process.stdout);
+                screen.clearProgress();
+                screen.addProgress(`Column '${column.column.name}':`);
+                screen.addProgress();
+                screen.writeProgress();
             }
 
-            const result = await service.getPull(card, draft);
+            const result = await service.getPull(card, settings.draft);
             if (result.error) {
-                console.log(`[${column.offset}/${column.cards.length}] ${result.message}, skipping.`);
-                shouldClear = false;
+                screen.addLog(`[${column.offset}/${column.cards.length}] ${result.message}, skipping.`);
+                screen.writeLog();
                 continue;
             }
 
             const { pull, labels } = result;
             currentPull = pull;
-            console.log(
-                `[${column.offset}/${column.cards.length}] ${pull.title}\n` +
-                `\t${chalk.underline(chalk.cyan(pull.html_url))}\n` +
-                `\tupdated: ${card.updated_at}\n` +
-                `\tapproved by you: ${pull.approvedByMe ? chalk.green("yes") : "no"}, approved: ${pull.approvedByAll ? chalk.green("yes") : "no"}\n` +
-                `\t${[...labels].join(', ')}`);
-            console.log();
+            screen.clearPull();
+            screen.addPull(`[${column.offset}/${column.cards.length}] ${pull.title}`);
+            screen.addPull(`\t${chalk.underline(chalk.cyan(pull.html_url))}`);
+            screen.addPull(`\tupdated: ${card.updated_at}`);
+            screen.addPull(`\tapproved by you: ${pull.approvedByMe ? chalk.green("yes") : "no"}, approved: ${pull.approvedByAll ? chalk.green("yes") : "no"}`);
+            screen.addPull(`\t${[...labels].join(', ')}`);
+            if (pull.botStatus) {
+                screen.addPull();
+                screen.addPull(`\t${chalk.whiteBright(`Status:`)}`);
+                for (const line of pull.botStatus) {
+                    screen.addPull(`\t${line}`);
+                }
+            }
+            screen.addPull();
+            screen.writePull();
             await chrome.navigateTo(pull.html_url);
         }
 
         await pushPrompt(runDownPrompt);
-        shouldClear = true;
+        screen.clearLog();
     }
 
     function shouldPopulateState(state: ColumnRunDownState | undefined) {
-        return !state || state.oldestFirst !== oldest;
+        return !state || state.oldestFirst !== settings.oldest;
     }
 
     async function populateState(column: Column): Promise<ColumnRunDownState> {
-        const cards = await service.getCards(column, oldest);
-        return { column: column, cards, offset: 0, oldestFirst: oldest };
+        const cards = await service.getCards(column, settings.oldest);
+        return { column: column, cards, offset: 0, oldestFirst: settings.oldest };
     }
 
     function nextCard(column: ColumnRunDownState | undefined): WorkArea | undefined {

@@ -15,6 +15,7 @@
 */
 
 import yargs = require("yargs");
+import { getDefaultSettingsFile, readSettings } from "./settings";
 
 export const options = yargs
     .option("token", {
@@ -34,18 +35,35 @@ export const options = yargs
         implies: "username",
         type: "string"
     })
-    .option("review", {
-        desc: "Include items from the 'Review' column of 'Pull Request Status Board'",
+    .option("config", {
+        desc: "Loads settings from a JSON file",
+        type: "string",
+        config: true,
+        configParser: readSettings,
+        default: getDefaultSettingsFile()
+    })
+    .option("save", {
+        desc: "Saves settings to '%HOMEDIR%/.focus-dt/config.json' and exits.",
+        type: "boolean",
+        conflicts: ["save-to"]
+    })
+    .option("save-to", {
+        desc: "Saves settings to the specified file and exits.",
+        type: "string",
+        conflicts: ["save"]
+    })
+    .option("needsReview", {
+        desc: "Include items from the 'Needs Maintainer Review' column of 'New Pull Request Status Board'",
         type: "boolean",
     })
-    .option("checkAndMerge", {
-        desc: "Include items from the 'Check and Merge' column of 'Pull Request Status Board'",
+    .option("needsAction", {
+        desc: "Include items from the 'Needs Maintainer Action' column of 'New Pull Request Status Board'",
         type: "boolean",
     })
     .option("oldest", {
         desc: "Sort so that the least recently updated cards come first",
         type: "boolean",
-        conficts: ["newest"]
+        conficts: ["newest"],
     })
     .option("newest", {
         desc: "Sort so that the most recently updated cards come first",
@@ -54,31 +72,30 @@ export const options = yargs
     })
     .option("draft", {
         desc: "Include 'Draft' PRs",
-        type: "boolean"
+        type: "boolean",
     })
     .option("port", {
         desc: "The remote debugging port to use to wait for the chrome tab to exit.",
-        type: "number"
+        type: "number",
     })
     .option("timeout", {
         desc: "The number of milliseconds to wait for the debugger to attach to the chrome process (default: 10,000).",
         type: "number",
-        default: 10000
     })
     .option("merge", {
         desc: "Set the default merge option to one of 'merge', 'squash', or 'rebase'.",
         type: "string",
-        choices: ["merge", "squash", "rebase", undefined]
+        choices: ["merge", "squash", "rebase", undefined],
     })
     .option("approve", {
         desc: 
-            "Sets the approval option to one of 'manual', 'auto', or 'always' (default 'manual').\n" +
+            "Sets the approval option to one of 'manual', 'auto', 'always', or 'only' (default 'manual').\n" +
             "  'manual' - Manually approve PRs in the CLI.\n" + 
             "  'auto' - Approve PRs when merging if they have no other approvers.\n" +
-            "  'always' - Approve PRs when merging if you haven't already approved.",
+            "  'always' - Approve PRs when merging if you haven't already approved.\n" +
+            "  'only' - Manually approve PRs in the CLI and advance to the next item (disables merging).",
         type: "string",
-        choices: ["manual", "auto", "always"],
-        default: "manual"
+        choices: ["manual", "auto", "always", "only"],
     })
     .option("verbose", {
         desc: "Increases the log level",
