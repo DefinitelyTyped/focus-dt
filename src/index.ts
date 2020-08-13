@@ -179,7 +179,7 @@ async function main() {
             },
             {
                 key: "a",
-                description: "approve",
+                description: () => settings.approve === "only" ? "approve and continue" : "approve",
                 disabled: () => !!currentPull?.approvedByMe,
                 hidden: () => settings.approve !== "manual" && settings.approve !== "only",
                 action: async (_, context) => {
