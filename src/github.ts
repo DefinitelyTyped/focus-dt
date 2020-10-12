@@ -102,7 +102,7 @@ export class ProjectService<K extends string = "Needs Maintainer Review" | "Need
             .toArray();
     }
 
-    async getPull(card: Card, includeDrafts?: boolean): Promise<GetPullResult> {
+    async getPull(card: Card, includeDrafts?: boolean, includeWip?: boolean, exclude?: Set<number>): Promise<GetPullResult> {
         const match = /(\d+)$/.exec(card.content_url);
         if (!match) {
             return { error: true, message: "Could not determine pull number" };
@@ -110,16 +110,24 @@ export class ProjectService<K extends string = "Needs Maintainer Review" | "Need
 
         const pull = (await this._github.pulls.get({ ...this._ownerAndRepo, pull_number: +match[1] })).data;
         if (pull.state === "closed") {
-            return { error: true, message: `'${pull.title}' is closed` };
+            return { error: true, message: `'${pull.title.trim()}' is closed` };
         }
 
         if ((pull.draft || pull.mergeable_state === "draft") && !includeDrafts) {
-            return { error: true, message: `'${pull.title}' is a draft and is not yet ready for review` };
+            return { error: true, message: `'${pull.title.trim()}' is a draft and is not yet ready for review` };
+        }
+
+        if (/\bwip\b/i.test(pull.title) && !includeWip) {
+            return { error: true, message: `'${pull.title.trim()}' is a work-in-progress and is not yet ready for review` };
         }
 
         const labels = new Set(pull.labels.map(label => label.name));
         if (labels.has("Revision needed")) {
-            return { error: true, message: `'${pull.title}' is awaiting revisions` };
+            return { error: true, message: `'${pull.title.trim()}' is awaiting revisions` };
+        }
+
+        if (exclude?.has(pull.number)) {
+            return { error: true, message: `'${pull.title.trim()}' was previously skipped` };
         }
 
         const id = await this.whoAmiI();
