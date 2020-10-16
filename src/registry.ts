@@ -16,6 +16,8 @@
 
 import Registry = require("winreg");
 
+export const HKLM = Registry.HKLM;
+
 export function regQuery(hive: string, key: string, valueName: string = Registry.DEFAULT_VALUE) {
     return new Promise<string | undefined>((resolve, reject) => {
         const reg = new Registry({ hive, key });

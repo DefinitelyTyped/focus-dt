@@ -18,39 +18,60 @@ import yargs = require("yargs");
 import { getDefaultSettingsFile, readSettings } from "./settings";
 
 export const options = yargs
+    .usage("$0 [options]")
+    // authentication
     .option("token", {
-        desc: "GitHub Auth Token. Uses %GITHUB_API_TOKEN%, %FOCUS_DT_GITHUB_API_TOKEN%, or %AUTH_TOKEN% (in that order) if available.",
+        desc: "GitHub Auth Token. Uses %GITHUB_API_TOKEN%, %FOCUS_DT_GITHUB_API_TOKEN%, or %AUTH_TOKEN% (in that order) if available",
+        group: "Authentication options:",
         conflicts: ["username", "password"],
         type: "string",
     })
     .option("username", {
         desc: "GitHub Username",
+        group: "Authentication options:",
         conflicts: ["token"],
         implies: "password",
-        type: "string"
+        type: "string",
     })
     .option("password", {
         desc: "GitHub Password",
+        group: "Authentication options:",
         conflicts: ["token"],
         implies: "username",
-        type: "string"
+        type: "string",
     })
+    .option("useCredentialManager", {
+        desc: "Use 'git credential' to load/save the credential to use",
+        group: "Authentication options:",
+        conflicts: ["token", "password"],
+        type: "boolean",
+        alias: "C",
+    })
+    // configuration
     .option("config", {
         desc: "Loads settings from a JSON file",
+        group: "Configuration options:",
         type: "string",
         config: true,
         configParser: readSettings,
         default: getDefaultSettingsFile()
     })
     .option("save", {
-        desc: "Saves settings to '%HOMEDIR%/.focus-dt/config.json' and exits.",
+        desc: "Saves settings to '%HOMEDIR%/.focus-dt/config.json' and exits",
+        group: "Configuration options:",
         type: "boolean",
         conflicts: ["save-to"]
     })
     .option("save-to", {
-        desc: "Saves settings to the specified file and exits.",
+        desc: "Saves settings to the specified file and exits",
+        group: "Configuration options:",
         type: "string",
         conflicts: ["save"]
+    })
+    // settings
+    .option("skipped", {
+        desc: "Include previously skipped items",
+        type: "boolean"
     })
     .option("needsReview", {
         desc: "Include items from the 'Needs Maintainer Review' column of 'New Pull Request Status Board'",
@@ -74,35 +95,52 @@ export const options = yargs
         desc: "Include 'Draft' PRs",
         type: "boolean",
     })
-    .option("port", {
-        desc: "The remote debugging port to use to wait for the chrome tab to exit.",
-        type: "number",
-    })
-    .option("timeout", {
-        desc: "The number of milliseconds to wait for the debugger to attach to the chrome process (default: 10,000).",
-        type: "number",
+    .option("wip", {
+        desc: "Include work-in-progress (WIP) PRs",
+        type: "boolean"
     })
     .option("merge", {
-        desc: "Set the default merge option to one of 'merge', 'squash', or 'rebase'.",
+        desc: "Set the default merge option to one of 'merge', 'squash', or 'rebase'",
         type: "string",
         choices: ["merge", "squash", "rebase", undefined],
     })
     .option("approve", {
-        desc: 
-            "Sets the approval option to one of 'manual', 'auto', 'always', or 'only' (default 'manual').\n" +
-            "  'manual' - Manually approve PRs in the CLI.\n" + 
-            "  'auto' - Approve PRs when merging if they have no other approvers.\n" +
-            "  'always' - Approve PRs when merging if you haven't already approved.\n" +
-            "  'only' - Manually approve PRs in the CLI and advance to the next item (disables merging).",
+        desc:
+            "Sets the approval option to one of 'manual', 'auto', 'always', or 'only' (default 'manual'):\n" +
+            "- 'manual' - Manually approve PRs in the CLI\n" +
+            "- 'auto' - Approve PRs when merging if they have no other approvers\n" +
+            "- 'always' - Approve PRs when merging if you haven't already approved\n" +
+            "- 'only' - Manually approve PRs in the CLI and advance to the next item (disables merging)",
         type: "string",
         choices: ["manual", "auto", "always", "only"],
     })
+    // chrome
+    .option("chromePath", {
+        desc: "The path to the chromium-based browser executable to use (defaults to detecting the current system path for chrome)",
+        group: "Browser options:",
+        type: "string"
+    })
+    .option("port", {
+        desc: "The remote debugging port to use to wait for the chrome tab to exit",
+        group: "Browser options:",
+        type: "number",
+    })
+    .option("timeout", {
+        desc: "The number of milliseconds to wait for the debugger to attach to the chrome process (default: 10,000)",
+        group: "Browser options:",
+        type: "number",
+    })
+    // other
     .option("verbose", {
         desc: "Increases the log level",
         type: "count",
         alias: ["v"]
     })
-    .help()
-    .alias(["h", "?"], "help");
+    .option("help", {
+        type: "boolean",
+        desc: "Show help",
+        alias: ["h"],
+    })
+    ;
 
 export const argv = options.argv;

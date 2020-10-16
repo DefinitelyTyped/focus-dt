@@ -1,8 +1,7 @@
-import { regQuery } from "./registry";
+import { regQuery, HKLM } from "./registry";
 import { spawn, ChildProcess } from "child_process";
 import { chromeConnection } from "vscode-chrome-debug-core";
 import { existsSync } from "fs";
-import Registry = require("winreg");
 import { EventEmitter } from "events";
 
 const defaultChromePaths: Partial<Record<NodeJS.Platform, string[]>> = {
@@ -17,8 +16,8 @@ export async function getChromePath() {
     let chromePath: string | undefined;
     if (process.platform === "win32") {
         chromePath =
-            await regQuery(Registry.HKLM, "SOFTWARE\\Clients\\StartMenuInternet\\Google Chrome\\shell\\open\\command") ||
-            await regQuery(Registry.HKLM, "SOFTWARE\\Wow6432Node\\Clients\\StartMenuInternet\\Google Chrome\\shell\\open\\command");
+            await regQuery(HKLM, "SOFTWARE\\Clients\\StartMenuInternet\\Google Chrome\\shell\\open\\command") ||
+            await regQuery(HKLM, "SOFTWARE\\Wow6432Node\\Clients\\StartMenuInternet\\Google Chrome\\shell\\open\\command");
     }
     if (!chromePath) {
         const chromePaths = defaultChromePaths[process.platform] || defaultChromePaths.linux;
@@ -41,16 +40,18 @@ export async function getChromePath() {
 }
 
 export class Chrome extends EventEmitter {
+    private _path: string | undefined;
     private _port: number;
     private _timeout: number;
     private _opening = false;
     private _proc: ChildProcess | undefined;
     private _connection!: chromeConnection.ChromeConnection;
 
-    constructor(port: number, timeout: number) {
+    constructor(port: number | "random", timeout: number, path?: string) {
         super();
-        this._port = port;
+        this._port = port === "random" ? getRandomPort() : port;
         this._timeout = timeout;
+        this._path = path;
     }
 
     get isOpen() {
@@ -80,7 +81,7 @@ export class Chrome extends EventEmitter {
             this._proc = undefined;
             this._connection = undefined!;
 
-            const chromePath = await getChromePath();
+            const chromePath = this._path ?? (this._path = await getChromePath());
             const proc = spawn(chromePath, [
                 '--no-first-run',
                 '--no-default-browser-check',
@@ -116,4 +117,8 @@ export class Chrome extends EventEmitter {
         this._connection = undefined!;
         this._proc = undefined;
     }
+}
+
+function getRandomPort() {
+    return 9000 + Math.floor(Math.random() * 999);
 }

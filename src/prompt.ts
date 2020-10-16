@@ -12,10 +12,10 @@ export interface PromptContext<R, S> {
     showAdvanced: boolean;
     result: R | undefined;
 
-    hide(): boolean;
-    show(): boolean;
-    refresh(): void;
-    close(result?: R): void;
+    hide(): Promise<boolean>;
+    show(): Promise<boolean>;
+    refresh(): Promise<void>;
+    close(result?: R): Promise<void>;
 }
 
 export interface Prompt<R = unknown, S = {}> {
@@ -255,17 +255,40 @@ const quitOption: Option<any, any> = {
 const advancedOption: Option<any, any> = {
     key: ["h", "?"],
     description: context => `${context.showAdvanced ? "hide" : "show"} advanced options`,
-    action: (_, context) => {
+    action: async (_, context) => {
+        const size = getPromptLineCount();
         if (currentPrompt?.prompt === context.prompt) {
-            hidePrompt();
+            await hidePrompt(false);
         }
         context.showAdvanced = !context.showAdvanced;
         if (currentPrompt?.prompt === context.prompt) {
-            refreshPrompt();
-            showPrompt();
+            await refreshPrompt();
+            if (currentPrompt?.prompt === context.prompt && size !== getPromptLineCount()) {
+                await onPromptSizeChange();
+            }
+            if (currentPrompt?.prompt === context.prompt) {
+                await showPrompt(false);
+            }
         }
     }
 };
+
+const onPromptSizeChangeCallbacks: (() => void | Promise<void>)[] = [];
+export function addOnPromptSizeChange(cb: () => void | Promise<void>) {
+    onPromptSizeChangeCallbacks.push(cb);
+}
+
+async function onPromptSizeChange() {
+    for (const onPromptSizeChange of onPromptSizeChangeCallbacks) {
+        try {
+            const result = onPromptSizeChange();
+            if (result) await result;
+        }
+        catch (e) {
+            console.error(e);
+        }
+    }
+}
 
 const onQuitCallbacks: (() => void | Promise<void>)[] = [];
 let quitPromise: Promise<void> | undefined;
@@ -276,7 +299,7 @@ let quitPromise: Promise<void> | undefined;
 export function quit() {
     if (quitPromise) return quitPromise;
     return quitPromise = (async () => {
-        hidePrompt();
+        await hidePrompt();
         unregisterOnKeypress();
         while (currentPrompt) {
             currentPrompt.visible = false;
@@ -364,6 +387,10 @@ function unregisterOnKeypress() {
     }
 }
 
+export function getPromptLineCount() {
+    return currentPrompt ? countLines(currentPrompt) : 0;
+}
+
 /**
  * Determines whether there is an active prompt.
  */
@@ -388,10 +415,13 @@ export function getCurrentPrompt() {
 /**
  * Make the active prompt visible.
  */
-export function showPrompt() {
+export async function showPrompt(raiseEvents = true) {
     if (currentPrompt && !currentPrompt.visible) {
         process.stdout.write(formatPrompt(currentPrompt) + "\n");
         currentPrompt.visible = true;
+        if (raiseEvents) {
+            await onPromptSizeChange();
+        }
         return true;
     }
     return false;
@@ -400,23 +430,26 @@ export function showPrompt() {
 /**
  * Reevaluate and update the active prompt.
  */
-export function refreshPrompt() {
+export async function refreshPrompt() {
     if (currentPrompt) {
         const wasVisible = isPromptVisible();
-        if (wasVisible) hidePrompt();
+        if (wasVisible) await hidePrompt(false);
         updatePrompt(currentPrompt);
-        if (wasVisible) showPrompt();
+        if (wasVisible) await showPrompt(true);
     }
 }
 
 /**
  * Makes the active prompt invisible.
  */
-export function hidePrompt() {
+export async function hidePrompt(raiseEvents = true) {
     if (currentPrompt?.visible) {
         readline.moveCursor(process.stdout, 0, -countLines(currentPrompt));
         readline.clearScreenDown(process.stdout);
         currentPrompt.visible = false;
+        if (raiseEvents) {
+            await onPromptSizeChange();
+        }
         return true;
     }
     return false;
@@ -477,9 +510,9 @@ async function evaluatePrompt<R, S>(prompt: Prompt<R, S>): Promise<EvaluatedProm
             get result() { return evaluated.result; },
             set result(value: R | undefined) { evaluated.result = value; },
 
-            show() {
+            async show() {
                 if (evaluated === currentPrompt) {
-                    return showPrompt();
+                    return await showPrompt();
                 }
                 else if (!evaluated.visible) {
                     evaluated.visible = true;
@@ -487,28 +520,28 @@ async function evaluatePrompt<R, S>(prompt: Prompt<R, S>): Promise<EvaluatedProm
                 }
                 return false;
             },
-            hide() {
+            async hide() {
                 if (evaluated === currentPrompt) {
-                    return hidePrompt();
+                    return await hidePrompt();
                 } else if (evaluated.visible) {
                     evaluated.visible = false;
                     return true;
                 }
                 return false;
             },
-            refresh() {
+            async refresh() {
                 if (evaluated === currentPrompt) {
-                    refreshPrompt();
+                    await refreshPrompt();
                 } else {
                     updatePrompt(evaluated);
                 }
             },
-            close(result) {
+            async close(result) {
                 if (result !== undefined) {
                     this.result = result;
                 }
                 if (evaluated === currentPrompt) {
-                    popPrompt();
+                    await popPrompt();
                 }
                 else {
                     evaluated.closed = true;
@@ -537,7 +570,7 @@ async function evaluatePrompt<R, S>(prompt: Prompt<R, S>): Promise<EvaluatedProm
  * Pushes a new prompt, returing a promise that is resolved when the prompt has closed.
  */
 export async function pushPrompt<R, S>(prompt: Prompt<R, S>): Promise<R | undefined> {
-    hidePrompt();
+    await hidePrompt(false);
     if (currentPrompt !== undefined) {
         promptStack.push(currentPrompt);
     }
@@ -545,7 +578,7 @@ export async function pushPrompt<R, S>(prompt: Prompt<R, S>): Promise<R | undefi
         registerOnKeypress();
     }
     const thisPrompt = currentPrompt = await evaluatePrompt(prompt);
-    showPrompt();
+    await showPrompt();
     await thisPrompt.promise;
     await thisPrompt.prompt.onExit?.(thisPrompt.context);
     return thisPrompt.result;
@@ -554,8 +587,8 @@ export async function pushPrompt<R, S>(prompt: Prompt<R, S>): Promise<R | undefi
 /**
  * Closes the current prompt and displays the previous prompt, if one exists.
  */
-export function popPrompt() {
-    hidePrompt();
+export async function popPrompt() {
+    const hidden = await hidePrompt(false);
     if (currentPrompt) {
         currentPrompt.closed = true;
         currentPrompt.resolve();
@@ -565,10 +598,13 @@ export function popPrompt() {
             currentPrompt = promptStack.pop();
         }
         if (currentPrompt !== undefined) {
-            showPrompt();
+            await showPrompt();
         }
         else {
             unregisterOnKeypress();
+            if (hidden) {
+                await onPromptSizeChange();
+            }
         }
     }
 }
