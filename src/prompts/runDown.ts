@@ -126,7 +126,8 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
                 description: "skip",
                 action: (_, context) => {
                     if (appContext.currentPull && tryAdd(appContext.skipped, appContext.currentPull.number)) {
-                        appContext.screen.addLog(`[${appContext.workArea?.column.offset}/${appContext.workArea?.column.cards.length}] ${appContext.currentPull.title} ${chalk.yellow("[skipped]")}.`)
+                        appContext.screen.clearPull();
+                        appContext.screen.addPull(`[${appContext.workArea?.column.offset}/${appContext.workArea?.column.cards.length}] ${appContext.currentPull.title} ${chalk.yellow("[skipped]")}.`);
                         saveSkipped(appContext.skipped);
                     }
                     context.close();

@@ -17,7 +17,8 @@
 import * as fs from "fs";
 import chalk from "chalk";
 import prompts = require("prompts");
-import { ProjectService, Column } from "./github";
+import colorConvert = require("color-convert");
+import { ProjectService, Column, Label } from "./github";
 import { Chrome } from "./chrome";
 import { pushPrompt, addOnQuit, isPromptVisible, hidePrompt, showPrompt, getPromptLineCount, addOnPromptSizeChange } from "./prompt";
 import { readSkipped } from "./settings";
@@ -28,6 +29,7 @@ import { ColumnRunDownState, Context, WorkArea } from "./context";
 import { createFilterPrompt } from "./prompts/filter";
 import { createRunDownPrompt } from "./prompts/runDown";
 import { init } from "./init";
+import { Octokit } from "@octokit/rest";
 
 async function main() {
     let {
@@ -64,12 +66,14 @@ async function main() {
                 }
             }
         },
+        project: ProjectService.defaultProject,
+        columns: ProjectService.defaultColumns,
         owner: "DefinitelyTyped",
         repo: "DefinitelyTyped",
+        team: "typescript-team"
     });
 
-    const project = await service.getProject();
-    const columns = await service.getColumns(project);
+    const columns = await service.getColumns();
     const screen = new Screen(process.stdout, {
         getPromptLineCount,
         isPromptVisible,
@@ -152,12 +156,26 @@ async function main() {
             screen.addPull(`\t${chalk.underline(chalk.cyan(pull.html_url))}${chalk.reset()}`);
             screen.addPull(`\tupdated: ${card.updated_at}`);
             screen.addPull(`\tapproved by you: ${pull.approvedByMe ? chalk.green("yes") : "no"}, approved: ${pull.approvedByAll ? chalk.green("yes") : "no"} `);
-            screen.addPull(`\t${[...labels].join(', ')}`);
+            screen.addPull(`\t${[...labels].map(colorizeLabel).join(', ')}`);
             if (pull.botStatus) {
                 screen.addPull();
                 screen.addPull(`\t${chalk.whiteBright(`Status:`)}`);
                 for (const line of pull.botStatus) {
                     screen.addPull(`\t${line}`);
+                }
+            }
+            if (pull.teamMembersWithReviews) {
+                if (!pull.botStatus) {
+                    screen.addPull();
+                    screen.addPull(`\t${chalk.whiteBright(`Status:`)}`);
+                }
+                for (const member of pull.teamMembersWithReviews) {
+                    if (member.state === "APPROVED") {
+                        screen.addPull(`\t * ✅ ${chalk.whiteBright(member)} ${chalk.greenBright("approved")} on ${member.submitted_at}.`);
+                    }
+                    else {
+                        screen.addPull(`\t * ❌ ${chalk.whiteBright(member)} ${chalk.redBright("requested changes")} on ${member.submitted_at}.`);
+                    }
                 }
             }
             screen.render();
@@ -183,5 +201,29 @@ async function main() {
         }
     }
 }
+
+function colorizeLabel(label: Label) {
+    let text = labelMap.get(label.name.toLowerCase());
+    if (text) return text;
+
+    if (label.color) {
+        const [red, green, blue] = colorConvert.hex.rgb(label.color);
+        // https://en.wikipedia.org/wiki/Relative_luminance
+        const luminosity = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+        if (luminosity > 0.3) {
+            // bright color, use as foreground
+            return chalk.hex(label.color)(label.name);
+        } else {
+            // dark color, use as background
+            return chalk.bgHex(label.color)(chalk.white(label.name));
+        }
+    }
+
+    return label.name;
+}
+
+const labelMap = new Map([
+    ["critical package", chalk.redBright("Critical package")]
+]);
 
 main().catch(e => console.error(e));

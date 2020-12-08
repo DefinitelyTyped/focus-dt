@@ -22,7 +22,7 @@ export interface Context {
     currentPull: Pull | undefined;
     skipped: Set<number>;
     screen: Screen;
-    service: ProjectService;
+    service: ProjectService<string>;
     chrome: Chrome;
     log: WriteStream;
 }

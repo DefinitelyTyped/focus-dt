@@ -19,15 +19,16 @@
     "url": "https://github.com/DefinitelyTyped/focus-dt/issues"
   },
   "devDependencies": {
+    "@types/color-convert": "^2.0.0",
     "@types/node": "^12.0.8",
     "@types/prompts": "^2.0.0",
     "@types/winreg": "^1.2.30",
     "@types/yargs": "^13.0.0",
     "chalk": "^3.0.0",
-    "typescript": "^3.8.3"
+    "typescript": "^4.1.2"
   },
   "dependencies": {
-    "@octokit/rest": "^16.28.1",
+    "@octokit/rest": "^18.0.12",
     "equatable": "^1.2.0",
     "iterable-query": "^1.0.0-pre.15",
     "prompts": "^2.1.0",
