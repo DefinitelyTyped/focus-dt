@@ -123,12 +123,34 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
             },
             {
                 key: "s",
-                description: "skip",
+                description: "skip until there are updates to the PR.",
                 action: (_, context) => {
-                    if (appContext.currentPull && tryAdd(appContext.skipped, appContext.currentPull.number)) {
-                        appContext.screen.clearPull();
-                        appContext.screen.addPull(`[${appContext.workArea?.column.offset}/${appContext.workArea?.column.cards.length}] ${appContext.currentPull.title} ${chalk.yellow("[skipped]")}.`);
-                        saveSkipped(appContext.skipped);
+                    if (appContext.currentPull) {
+                        let skipDate = appContext.skipped.get(appContext.currentPull.number);
+                        if (skipDate === undefined || skipDate < Date.now()) {
+                            appContext.skipped.set(appContext.currentPull.number, Date.now());
+                            appContext.screen.clearPull();
+                            appContext.screen.addPull(`[${appContext.workArea!.column.offset}/${appContext.workArea?.column.cards.length}] ${appContext.currentPull.title} ${chalk.yellow("[skipped]")}.`);
+                            saveSkipped(appContext.skipped);
+                        }
+                    }
+                    context.close();
+                }
+            },
+            {
+                key: "d",
+                description: "defer this PR until the end of the current column.",
+                disabled: () => !(appContext.currentPull && appContext.workArea && appContext.workArea.column.offset < appContext.workArea.column.cards.length),
+                action: (_, context) => {
+                    if (appContext.currentPull && appContext.workArea) {
+                        if (appContext.workArea.column.offset > 0 &&
+                            appContext.workArea.column.offset < appContext.workArea.column.cards.length &&
+                            appContext.workArea.column.cards[appContext.workArea.column.offset - 1] === appContext.workArea.card) {
+                            appContext.screen.clearPull();
+                            appContext.screen.addPull(`[${appContext.workArea?.column.offset}/${appContext.workArea?.column.cards.length}] ${appContext.currentPull.title} ${chalk.yellow("[deferred]")}.`);
+                            appContext.workArea.column.offset--;
+                            appContext.workArea.column.cards.push(...appContext.workArea.column.cards.splice(appContext.workArea.column.offset, 1));
+                        }
                     }
                     context.close();
                 }

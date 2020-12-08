@@ -237,9 +237,10 @@ export class ProjectService<K extends string> {
      * @param card The project board card.
      * @param includeDrafts Whether to include Draft PRs
      * @param includeWip Whether to include PRs marked WIP
-     * @param exclude A set of PR numbers to exclude.
+     * @param exclude A map of PR numbers to exclude to the Date they were excluded (in milliseconds since the UNIX epoch)
+     * @param excludeTimeout A window in which updates to an excluded PR should be ignored before the PR should no longer be considered excluded.
      */
-    async getPull(card: Card, includeDrafts?: boolean, includeWip?: boolean, exclude?: Set<number>): Promise<GetPullResult> {
+    async getPull(card: Card, includeDrafts?: boolean, includeWip?: boolean, exclude?: Map<number, number>, excludeTimeout = 0): Promise<GetPullResult> {
         const match = /(\d+)$/.exec(card.content_url || "");
         if (!match) {
             return { error: true, message: "Could not determine pull number" };
@@ -267,7 +268,8 @@ export class ProjectService<K extends string> {
             return { error: true, message: `'${pull.title.trim()}' is awaiting revisions` };
         }
 
-        if (exclude?.has(pull.number)) {
+        let excludeTimestamp = exclude?.get(pull.number);
+        if (excludeTimestamp && Date.parse(pull.updated_at) < excludeTimestamp + excludeTimeout) {
             return { error: true, message: `'${pull.title.trim()}' was previously skipped` };
         }
 

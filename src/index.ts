@@ -21,7 +21,7 @@ import colorConvert = require("color-convert");
 import { ProjectService, Column, Label } from "./github";
 import { Chrome } from "./chrome";
 import { pushPrompt, addOnQuit, isPromptVisible, hidePrompt, showPrompt, getPromptLineCount, addOnPromptSizeChange } from "./prompt";
-import { readSkipped } from "./settings";
+import { readSkipped, saveSkipped } from "./settings";
 import { Screen } from "./screen";
 import { createMergePrompt } from "./prompts/merge";
 import { createApprovalPrompt } from "./prompts/approval";
@@ -86,7 +86,8 @@ async function main() {
         reviewState: undefined,
         currentPull: undefined,
         workArea: undefined,
-        skipped: new Set<number>(readSkipped()),
+        skipped: new Map<number, number>(readSkipped()?.skipped),
+        skipTimeout: 10 * 60 * 1000, // 10 minutes, in MS
         screen,
         service,
         log,
@@ -142,7 +143,7 @@ async function main() {
                 screen.render();
             }
 
-            const result = await service.getPull(card, settings.draft, settings.wip, settings.skipped ? undefined : context.skipped);
+            const result = await service.getPull(card, settings.draft, settings.wip, settings.skipped ? undefined : context.skipped, context.skipTimeout);
             if (result.error) {
                 screen.addLog(`[${column.offset}/${column.cards.length}] ${result.message}, skipping.`);
                 screen.render();
@@ -150,11 +151,17 @@ async function main() {
             }
 
             const { pull, labels } = result;
+
+            // If we previously skipped this pull and it has been updated since it was last skipped, remove it from the list of skipped PRs.
+            const skippedTimestamp = context.skipped.get(pull.number);
             context.currentPull = pull;
             screen.clearPull();
             screen.addPull(`[${column.offset}/${column.cards.length}] ${pull.title}`);
             screen.addPull(`\t${chalk.underline(chalk.cyan(pull.html_url))}${chalk.reset()}`);
-            screen.addPull(`\tupdated: ${card.updated_at}`);
+            screen.addPull(`\tupdated: ${pull.updated_at}`);
+            if (skippedTimestamp && (skippedTimestamp + context.skipTimeout) < Date.parse(pull.updated_at)) {
+                screen.addPull(`\t${chalk.yellow("skipped")}: ${new Date(skippedTimestamp).toISOString().replace(/\.\d+Z$/, "Z")}, but has since been updated.`);
+            }
             screen.addPull(`\tapproved by you: ${pull.approvedByMe ? chalk.green("yes") : "no"}, approved: ${pull.approvedByAll ? chalk.green("yes") : "no"} `);
             screen.addPull(`\t${[...labels].map(colorizeLabel).join(', ')}`);
             if (pull.botStatus) {

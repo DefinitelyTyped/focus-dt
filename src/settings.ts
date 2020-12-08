@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { skip } from "iterable-query/dist/lib/fn";
 
 export interface Settings {
     needsReview: boolean;
@@ -74,10 +75,43 @@ export function getDefaultSkippedFile() {
     return path.join(settingsDir, "skipped.json");
 }
 
-export function saveSkipped(skipped: Set<number> | number[] | undefined, file = getDefaultSkippedFile()) {
+export interface SkippedFiles {
+    version: 2,
+    skipped: [number, number][];
+}
+
+export function readSkipped(file = getDefaultSkippedFile()) {
+    try {
+        const text = fs.readFileSync(file, "utf8");
+        let object = JSON.parse(text) as number[] | SkippedFiles;
+        if (Array.isArray(object)) {
+            if (!object.every(x => typeof x === "number")) {
+                return undefined;
+            }
+            object = { version: 2, skipped: object.map(pull_number => [pull_number, Date.now()]) };
+            saveSkipped(object, file);
+        }
+        if (typeof object === "object" && object.version === 2) {
+            return object;
+        }
+    }
+    catch {
+        // do nothing
+    }
+    return undefined;
+}
+
+export function saveSkipped(skipped: Map<number, number> | SkippedFiles | undefined, file = getDefaultSkippedFile()) {
     if (path.extname(file) !== ".json") throw new Error(`Skipped PR file must have a .json extension: '${file}'`);
-    if (skipped && !Array.isArray(skipped)) skipped = [...skipped];
-    if (!skipped?.length) {
+    if (skipped instanceof Map) {
+        if (skipped.size === 0) {
+            skipped = undefined;
+        }
+        else {
+            skipped = { version: 2, skipped: [...skipped] };
+        }
+    }
+    if (!skipped?.skipped.length) {
         try {
             fs.unlinkSync(file);
         }
@@ -89,16 +123,5 @@ export function saveSkipped(skipped: Set<number> | number[] | undefined, file = 
         const settingsDir = path.dirname(file);
         try { fs.mkdirSync(settingsDir, { recursive: true }); } catch { }
         fs.writeFileSync(file, JSON.stringify(skipped, undefined, "  "), "utf8");
-    }
-}
-
-export function readSkipped(file = getDefaultSkippedFile()) {
-    try {
-        const text = fs.readFileSync(file, "utf8");
-        const array = JSON.parse(text) as number[];
-        if (Array.isArray(array) && array.every(x => typeof x === "number")) return array;
-    }
-    catch {
-        // do nothing
     }
 }
