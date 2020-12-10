@@ -100,7 +100,7 @@ async function main() {
     const runDownPrompt = createRunDownPrompt(settings, context, filterPrompt, approvalPrompt, mergePrompt);
 
     let lastColumn: Column | undefined;
-    let lastShowOther = false;
+    let lastShowAction = false;
     let lastShowReview = false;
 
     while (true) {
@@ -113,18 +113,31 @@ async function main() {
             context.reviewState = await populateState(columns["Needs Maintainer Review"]);
         }
 
-        if (lastShowOther !== settings.needsAction || lastShowReview !== settings.needsReview) {
-            lastShowOther = settings.needsAction;
+        context.workArea = nextCard(context.reviewState) || nextCard(context.actionState);
+        if (lastShowAction !== settings.needsAction ||
+            lastShowReview !== settings.needsReview ||
+            !context.workArea ||
+            context.workArea.column.column !== lastColumn) {
+            lastShowAction = settings.needsAction;
             lastShowReview = settings.needsReview;
             screen.clearHeader();
-            screen.addHeader(`'Needs Maintainer Review' ${context.reviewState ? `count: ${context.reviewState.cards.length}` : "excluded."}`);
-            screen.addHeader(`'Needs Maintainer Action' ${context.actionState ? `count: ${context.actionState.cards.length}` : "excluded."}`);
-            screen.addHeader(`order by: ${settings.oldest ? "oldest" : "newest"} first`);
-            screen.addHeader();
+            const columnName = context.workArea?.column.column.name;
+            const column1Name = "Needs Maintainer Review";
+            const column1Selected = columnName === column1Name ? "* " : "";
+            const column1Color = column1Selected ? "bgCyan.whiteBright" : "bgGray.black";
+            const column1Count = context.reviewState?.cards.length ?? "excluded";
+            const column2Name = "Needs Maintainer Action";
+            const column2Selected = columnName === column2Name ? "* " : "";
+            const column2Color = column2Selected ? "bgCyan.whiteBright" : "bgGray.black";
+            const column2Count = context.actionState?.cards.length ?? "excluded";
+            const column1Left = column1Selected ? chalk.bgBlack.cyan("▟") : chalk.bgBlack.gray("▟");
+            const column1Right = column1Selected ? chalk.bgBlack.cyan("▙") : chalk.bgBlack.gray("▙");
+            const column2Left = column2Selected ? chalk.bgBlack.cyan("▟") : chalk.bgBlack.gray("▟");
+            const column2Right = column2Selected ? chalk.bgBlack.cyan("▙") : chalk.bgBlack.gray("▙");
+            screen.addHeader(chalk`${column1Left}{${column1Color}  ${column1Selected}${column1Name}: ${column1Count} }${column1Right} ${column2Left}{${column2Color}  ${column2Selected}${column2Name}: ${column2Count} }${column2Right} order by: ${settings.oldest ? "oldest" : "newest"} first`);
             screen.render();
         }
 
-        context.workArea = nextCard(context.reviewState) || nextCard(context.actionState);
         if (!context.workArea) {
             lastColumn = undefined;
             screen.clearProgress();
@@ -138,8 +151,6 @@ async function main() {
             if (column.column !== lastColumn) {
                 lastColumn = column.column;
                 screen.clearProgress();
-                screen.addProgress(`Column '${column.column.name}':`);
-                screen.addProgress();
                 screen.render();
             }
 
@@ -154,37 +165,44 @@ async function main() {
 
             // If we previously skipped this pull and it has been updated since it was last skipped, remove it from the list of skipped PRs.
             const skippedTimestamp = context.skipped.get(pull.number);
+            const skipMessage = skippedTimestamp && (skippedTimestamp + context.skipTimeout) < Date.parse(pull.updated_at) ?
+                chalk`, {yellow skipped}: ${new Date(skippedTimestamp).toISOString().replace(/\.\d+Z$/, "Z")}` :
+                "";
             context.currentPull = pull;
             screen.clearPull();
             screen.addPull(`[${column.offset}/${column.cards.length}] ${pull.title}`);
-            screen.addPull(`\t${chalk.underline(chalk.cyan(pull.html_url))}${chalk.reset()}`);
-            screen.addPull(`\tupdated: ${pull.updated_at}`);
-            if (skippedTimestamp && (skippedTimestamp + context.skipTimeout) < Date.parse(pull.updated_at)) {
-                screen.addPull(`\t${chalk.yellow("skipped")}: ${new Date(skippedTimestamp).toISOString().replace(/\.\d+Z$/, "Z")}, but has since been updated.`);
-            }
-            screen.addPull(`\tapproved by you: ${pull.approvedByMe ? chalk.green("yes") : "no"}, approved: ${pull.approvedByAll ? chalk.green("yes") : "no"} `);
-            screen.addPull(`\t${[...labels].map(colorizeLabel).join(', ')}`);
+            screen.addPull(chalk`    {cyan.underline ${pull.html_url}}{reset }`);
+            screen.addPull(chalk`    {whiteBright Author:}  @${pull.user?.login}`);
+            screen.addPull(chalk`    {whiteBright Updated:} ${pull.updated_at}${skipMessage}`);
+            screen.addPull(chalk`    {whiteBright Tags:}    ${[...labels].map(colorizeLabel).join(', ')}`);
             if (pull.botStatus) {
-                screen.addPull();
-                screen.addPull(`\t${chalk.whiteBright(`Status:`)}`);
+                screen.addPull(chalk`    {whiteBright Status:}`);
                 for (const line of pull.botStatus) {
-                    screen.addPull(`\t${line}`);
+                    if (line.trim()) screen.addPull(`    ${line}`);
                 }
             }
             if (pull.teamMembersWithReviews) {
-                if (!pull.botStatus) {
-                    screen.addPull();
-                    screen.addPull(`\t${chalk.whiteBright(`Status:`)}`);
-                }
+                screen.addPull(chalk`    {whiteBright Maintainer Reviews:}`);
                 for (const member of pull.teamMembersWithReviews) {
-                    if (member.state === "APPROVED") {
-                        screen.addPull(`\t * ✅ ${chalk.whiteBright(member)} ${chalk.greenBright("approved")} on ${member.submitted_at}.`);
-                    }
-                    else {
-                        screen.addPull(`\t * ❌ ${chalk.whiteBright(member)} ${chalk.redBright("requested changes")} on ${member.submitted_at}.`);
-                    }
+                    const approved = member.state === "APPROVED";
+                    const mark = approved ? "✅" : "❌";
+                    const color = approved ? "greenBright" : "redBright";
+                    const message = approved ? "approved" : "requested changes";
+                    screen.addPull(chalk`     * ${mark} {whiteBright @${member.login}} {${color} ${message}} on ${member.submitted_at}.`);
                 }
             }
+            if (pull.recentCommits) {
+                const recentCommits = pull.recentCommits.slice(-2).sort((a, b) => 
+                    (a.commit.committer?.date || "") < (b.commit.committer?.date || "") ? -1 :
+                    (a.commit.committer?.date || "") > (b.commit.committer?.date || "") ? 1 :
+                    0);
+                screen.addPull(chalk`    {whiteBright Recent Commits${pull.approvedByMe === "recheck" ? " (since you last approved)" : ""}:}`);
+                for (const commit of recentCommits) {
+                    screen.addPull(`     * ${commit.commit.message}`);
+                    screen.addPull(chalk`       {whiteBright @${commit.committer?.login}} on ${commit.commit.committer?.date}`);
+                }
+            }
+            screen.addPull(" ");
             screen.render();
             await chrome.navigateTo(pull.html_url);
         }

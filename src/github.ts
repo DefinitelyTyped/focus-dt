@@ -18,6 +18,10 @@ declare module "@octokit/rest" {
         type TeamsListMembersResponse = RestEndpointMethodTypes["teams"]["listMembersInOrg"]["response"]["data"];
         type TeamsListMembersResponseItem = TeamsListMembersResponse[number];
         type PullsGetResponseLabelItem = PullsGetResponse["labels"][number];
+        type PullsListCommitsResponse = RestEndpointMethodTypes["pulls"]["listCommits"]["response"]["data"];
+        type PullsListCommitsResponseItem = PullsListCommitsResponse[number];
+        type ReposListCommitsResponse = RestEndpointMethodTypes["repos"]["listCommits"]["response"]["data"];
+        type ReposListCommitsResponseItem = ReposListCommitsResponse[number];
     }
 }
 
@@ -33,13 +37,19 @@ export interface Card extends Octokit.ProjectsListCardsResponseItem {}
 /** A GitHub Pull Request, with some additional options */
 export interface Pull extends Octokit.PullsGetResponse {
     /** Indicates whether the authenticated user has approved the PR */
-    approvedByMe?: boolean;
+    approvedByMe?: boolean | "recheck";
     /** Indicates whether all reviews are currently approvals */
     approvedByAll?: boolean;
     /** Review state for any team members */
     teamMembersWithReviews?: TeamMemberReviewState[];
     /** Status message lines from the DT bot */
     botStatus?: string[];
+    lastCommit?: Commit;
+    recentCommits?: Commit[];
+}
+
+/** A Commit in a GitHub Repo or Pull Request */
+export interface Commit extends Octokit.PullsListCommitsResponseItem, Octokit.ReposListCommitsResponseItem {
 }
 
 /** A GitHub Label */
@@ -276,6 +286,7 @@ export class ProjectService<K extends string> {
         const me = await this.getAuthenticatedUser();
         const reviews = await this.listReviews(pull);
         const teamMembers = await this.listTeamMembers();
+        const lastCommit = await this.latestCommit(pull);
 
         // Search for the typescript-bot comment
         const { data: comments } = await this._github.issues.listComments({
@@ -302,9 +313,14 @@ export class ProjectService<K extends string> {
         }
 
         const approvedByAll = ProjectService.isApprovedByAllCore(reviews);
-        const approvedByMe = ProjectService.isApprovedByMeCore(me, reviews);
         const teamMembersWithRequestedChanges = ProjectService.teamMembersWithReviewsCore(teamMembers, reviews);
-        return { error: false, pull: { ...pull, approvedByMe, approvedByAll, teamMembersWithReviews: teamMembersWithRequestedChanges, botStatus }, labels: [...labels.values()] };
+        const myApproval = ProjectService.getMyApprovalCore(me, reviews);
+        const recentCommits =
+            myApproval ? await this.commitsSince(pull, myApproval.submitted_at!) :
+            excludeTimestamp ? await this.commitsSince(pull, new Date(excludeTimestamp).toISOString()) :
+            undefined;
+        const approvedByMe = myApproval ? lastCommit && (lastCommit.commit.committer?.date || "") > (myApproval.submitted_at || "") ? "recheck" : true : false;
+        return { error: false, pull: { ...pull, approvedByMe, approvedByAll, teamMembersWithReviews: teamMembersWithRequestedChanges, botStatus, lastCommit, recentCommits }, labels: [...labels.values()] };
     }
 
     private async listReviews(pull: Pull) {
@@ -343,8 +359,8 @@ export class ProjectService<K extends string> {
         return ProjectService.latestReviews(reviews)?.every(ProjectService.reviewIsApproved) ?? false;
     }
 
-    private static isApprovedByMeCore(me: Octokit.UsersGetAuthenticatedResponse | null | undefined, reviews: Octokit.PullsListReviewsResponse | null | undefined) {
-        return me && ProjectService.latestReviews(reviews)?.some(review => ProjectService.reviewIsApproved(review) && review.user?.id === me.id) || false;
+    private static getMyApprovalCore(me: Octokit.UsersGetAuthenticatedResponse | null | undefined, reviews: Octokit.PullsListReviewsResponse | null | undefined) {
+        return me && ProjectService.latestReviews(reviews)?.find(review => ProjectService.reviewIsApproved(review) && review.user?.id === me.id) || false;
     }
 
     private static teamMembersWithReviewsCore(teamMembers: Octokit.TeamsListMembersResponseItem[] | null | undefined, reviews: Octokit.PullsListReviewsResponse | null | undefined) {
@@ -375,7 +391,7 @@ export class ProjectService<K extends string> {
      */
     async isApprovedByMe(pull: Pull): Promise<boolean> {
         const [me, reviews] = await Promise.all([this.getAuthenticatedUser(), this.listReviews(pull)]);
-        return ProjectService.isApprovedByMeCore(me, reviews);
+        return !!ProjectService.getMyApprovalCore(me, reviews);
     }
 
     /**
@@ -386,12 +402,36 @@ export class ProjectService<K extends string> {
         return ProjectService.teamMembersWithReviewsCore(teamMembers, reviews);
     }
 
+    async commitsSince(pull: Pull, date: string) {
+        if (pull.commits > 0) {
+            const { data: commits } = await this._github.repos.listCommits({
+                owner: pull.head.repo.owner.login,
+                repo: pull.head.repo.name,
+                sha: pull.head.sha,
+                since: date
+            });
+            return commits;
+        }
+    }
+
+    async latestCommit(pull: Pull) {
+        if (pull.commits > 0) {
+            const { data: [commit] } = await this._github.repos.listCommits({
+                owner: pull.head.repo.owner.login,
+                repo: pull.head.repo.name,
+                sha: pull.head.sha,
+                per_page: 1
+            });
+            return commit;
+        }
+    }
+
     /**
      * Approves a pull.
      */
     async approvePull(pull: Pull): Promise<void> {
         const me = await this.getAuthenticatedUser();
-        if (ProjectService.isApprovedByMeCore(me, await this.listReviews(pull))) {
+        if (ProjectService.getMyApprovalCore(me, await this.listReviews(pull))) {
             return;
         }
 
@@ -410,7 +450,7 @@ export class ProjectService<K extends string> {
 
         const teamMembers = await this.listTeamMembers();
         const reviews = await this.listReviews(pull);
-        pull.approvedByMe = ProjectService.isApprovedByMeCore(me, reviews);
+        pull.approvedByMe = !!ProjectService.getMyApprovalCore(me, reviews);
         pull.approvedByAll = ProjectService.isApprovedByAllCore(reviews);
         pull.teamMembersWithReviews = ProjectService.teamMembersWithReviewsCore(teamMembers, reviews);
     }

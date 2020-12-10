@@ -55,7 +55,7 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
             {
                 key: "a",
                 description: () => settings.approve === "only" ? "approve and continue" : "approve",
-                disabled: () => !!appContext.currentPull?.approvedByMe,
+                disabled: () => appContext.currentPull?.approvedByMe === true,
                 hidden: () => settings.approve !== "manual" && settings.approve !== "only",
                 action: async (_, context) => {
                     if (!appContext.currentPull) return;
