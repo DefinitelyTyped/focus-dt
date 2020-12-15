@@ -1,7 +1,18 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { skip } from "iterable-query/dist/lib/fn";
+
+export type MergeMode =
+    | "merge"   // Perform a merge commit
+    | "squash"  // Squash all commits into a single commit
+    | "rebase"  // Rebase and merge
+    ;
+
+export type ApprovalMode =
+    | "manual"  // Require manual approval
+    | "auto"    // Approve before merging only if there are no other approvers for the most recent change
+    | "always"  // Approve before merging only if you haven't already approved the most recent change
+    ;
 
 export interface Settings {
     needsReview: boolean;
@@ -12,8 +23,8 @@ export interface Settings {
     skipped: boolean;
     port: number | "random";
     timeout: number;
-    merge: "merge" | "squash" | "rebase" | undefined;
-    approve: "manual" | "auto" | "always" | "only";
+    merge: MergeMode | undefined;
+    approve: ApprovalMode;
     chromePath: string | undefined;
 }
 
@@ -46,7 +57,9 @@ export function saveSettings(settings: Settings, file = getDefaultSettingsFile()
 export function readSettings(file = getDefaultSettingsFile()) {
     try {
         const text = fs.readFileSync(file, "utf8");
-        return { ...getDefaultSettings(), ...JSON.parse(text) } as Settings;
+        const settings = { ...getDefaultSettings(), ...JSON.parse(text) } as Settings;
+        if ((settings.approve as string) === "only") settings.approve = "manual";
+        return settings;
     }
     catch {
         return getDefaultSettings();

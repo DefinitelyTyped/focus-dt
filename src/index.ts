@@ -154,7 +154,7 @@ async function main() {
                 screen.render();
             }
 
-            const result = await service.getPull(card, settings.draft, settings.wip, settings.skipped ? undefined : context.skipped, context.skipTimeout);
+            const result = await service.getPullFromCard(card, settings.draft, settings.wip, settings.skipped ? undefined : context.skipped);
             if (result.error) {
                 screen.addLog(`[${column.offset}/${column.cards.length}] ${result.message}, skipping.`);
                 screen.render();
@@ -165,7 +165,7 @@ async function main() {
 
             // If we previously skipped this pull and it has been updated since it was last skipped, remove it from the list of skipped PRs.
             const skippedTimestamp = context.skipped.get(pull.number);
-            const skipMessage = skippedTimestamp && (skippedTimestamp + context.skipTimeout) < Date.parse(pull.updated_at) ?
+            const skipMessage = skippedTimestamp && !service.shouldSkip(pull, context.skipped) ?
                 chalk`, {yellow skipped}: ${new Date(skippedTimestamp).toISOString().replace(/\.\d+Z$/, "Z")}` :
                 "";
             context.currentPull = pull;
@@ -173,7 +173,7 @@ async function main() {
             screen.addPull(`[${column.offset}/${column.cards.length}] ${pull.title}`);
             screen.addPull(chalk`    {cyan.underline ${pull.html_url}}{reset }`);
             screen.addPull(chalk`    {whiteBright Author:}  @${pull.user?.login}`);
-            screen.addPull(chalk`    {whiteBright Updated:} ${pull.updated_at}${skipMessage}`);
+            screen.addPull(chalk`    {whiteBright Updated:} ${pull.lastUpdatedAt ?? pull.updated_at}${skipMessage}`);
             screen.addPull(chalk`    {whiteBright Tags:}    ${[...labels].map(colorizeLabel).join(', ')}`);
             if (pull.botStatus) {
                 screen.addPull(chalk`    {whiteBright Status:}`);
@@ -181,14 +181,37 @@ async function main() {
                     if (line.trim()) screen.addPull(`    ${line}`);
                 }
             }
-            if (pull.teamMembersWithReviews) {
-                screen.addPull(chalk`    {whiteBright Maintainer Reviews:}`);
-                for (const member of pull.teamMembersWithReviews) {
-                    const approved = member.state === "APPROVED";
+            if (pull.ownerReviews) {
+                const outdated = pull.approvedByOwners === "outdated" ? chalk` {yellow [outdated]}` : "";
+                screen.addPull(chalk`    {whiteBright Owner Reviews:}${outdated}`);
+                const packages = new Set(pull.botData?.pkgInfo.map(pkg => pkg.name));
+                for (const review of pull.ownerReviews) {
+                    if (review.maintainerReview || !review.ownerReviewFor) continue;
+                    const approved = review.state === "APPROVED";
                     const mark = approved ? "✅" : "❌";
                     const color = approved ? "greenBright" : "redBright";
                     const message = approved ? "approved" : "requested changes";
-                    screen.addPull(chalk`     * ${mark} {whiteBright @${member.login}} {${color} ${message}} on ${member.submitted_at}.`);
+                    const ownerReviewFor = `(${review.ownerReviewFor.join(", ")})`;
+                    const outdated = review.isOutdated ? chalk` {yellow [outdated]}` : "";
+                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} ${ownerReviewFor} {${color} ${message}} on ${review.submitted_at}${outdated}.`);
+                    for (const packageName of review.ownerReviewFor) {
+                        packages.delete(packageName);
+                    }
+                }
+                for (const packageName of packages) {
+                    screen.addPull(chalk`     * ❌ {whiteBright Package '${packageName}'} missing reviewer.`);
+                }
+            }
+            if (pull.maintainerReviews) {
+                const outdated = pull.approvedByMaintainer === "outdated" ? chalk` {yellow [outdated]}` : "";
+                screen.addPull(chalk`    {whiteBright Maintainer Reviews:}${outdated}`);
+                for (const review of pull.maintainerReviews) {
+                    const approved = review.state === "APPROVED";
+                    const mark = approved ? "✅" : "❌";
+                    const color = approved ? "greenBright" : "redBright";
+                    const message = approved ? "approved" : "requested changes";
+                    const outdated = review.isOutdated ? chalk` {yellow [outdated]}` : "";
+                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} {${color} ${message}} on ${review.submitted_at}${outdated}.`);
                 }
             }
             if (pull.recentCommits) {
@@ -196,9 +219,9 @@ async function main() {
                     (a.commit.committer?.date || "") < (b.commit.committer?.date || "") ? -1 :
                     (a.commit.committer?.date || "") > (b.commit.committer?.date || "") ? 1 :
                     0);
-                screen.addPull(chalk`    {whiteBright Recent Commits${pull.approvedByMe === "recheck" ? " (since you last approved)" : ""}:}`);
+                screen.addPull(chalk`    {whiteBright Recent Commits${pull.approvedByMe === "outdated" ? " (since you last approved)" : ""}:}`);
                 for (const commit of recentCommits) {
-                    screen.addPull(`     * ${commit.commit.message}`);
+                    screen.addPull(`     * ${commit.commit.message.replace(/\n(\s*\n)+/g, "\n").replace(/\n(?!$)/g, "\n       ")}`);
                     screen.addPull(chalk`       {whiteBright @${commit.committer?.login}} on ${commit.commit.committer?.date}`);
                 }
             }

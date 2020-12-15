@@ -114,8 +114,11 @@ export async function init() {
     const defaultMerge: "merge" | "squash" | "rebase" | undefined =
         merge === "merge" || merge === "squash" || merge === "rebase" ? merge : undefined;
 
-    const approvalMode: "manual" | "auto" | "always" | "only" =
-        approve === "manual" || approve === "auto" || approve === "always" || approve === "only" ? approve : "manual";
+    const approvalMode =
+        approve === "manual" ||
+        approve === "auto" ||
+        approve === "always" ? approve :
+        "manual";
 
     const settings: Settings = {
         needsAction,

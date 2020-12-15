@@ -2,106 +2,105 @@ import chalk from "chalk";
 import { Context } from "../context";
 import { Prompt, pushPrompt } from "../prompt";
 import { saveSettings, saveSkipped, Settings } from "../settings";
-import { tryAdd } from "../utils";
 
 export function createRunDownPrompt(settings: Settings, appContext: Context, filterPrompt: Prompt<boolean>, approvalPrompt: Prompt<boolean>, mergePrompt: Prompt<boolean>): Prompt {
     return {
         title: "Options",
         options: [
             {
-                key: "f",
-                description: "change filters",
-                advanced: true,
-                action: async (_, context) => {
-                    const result = await pushPrompt(filterPrompt);
-                    if (result) {
-                        context.close();
-                    }
-                },
-            },
-            {
                 key: "alt+a",
                 description: "set the default approval option",
                 advanced: true,
-                action: async (_, context) => {
-                    const result = await pushPrompt(approvalPrompt);
-                    if (result) {
-                        context.refresh();
-                    }
+                action: async (prompt) => {
+                    // If approval mode has changed, refresh the current prompt
+                    if (await pushPrompt(approvalPrompt)) await prompt.refresh();
                 }
             },
             {
                 key: "alt+m",
                 description: "set the default merge option",
                 advanced: true,
-                action: async (_, context) => {
-                    const result = await pushPrompt(mergePrompt);
-                    if (result) {
-                        context.refresh();
-                    }
+                action: async (prompt) => {
+                    // If merge mode has changed, refresh the current prompt
+                    if (await pushPrompt(mergePrompt)) await prompt.refresh();
                 }
+            },
+            {
+                key: "f",
+                description: "change filters",
+                advanced: true,
+                action: async (prompt) => {
+                    // If the filter has changed, close the prompt
+                    if (await pushPrompt(filterPrompt)) await prompt.close();
+                },
             },
             {
                 key: "ctrl+s",
                 description: "save current configuration options as defaults",
                 advanced: true,
-                action: async (_, context) => {
-                    context.hide();
+                action: async (prompt) => {
+                    await prompt.hide();
                     saveSettings(settings);
                     process.stdout.write("Configuration saved.\n\n");
-                    context.show();
+                    await prompt.show();
                 }
             },
             {
                 key: "a",
-                description: () => settings.approve === "only" ? "approve and continue" : "approve",
+                description: () => appContext.currentPull?.supportsSelfMerge ? "approve and continue" : "approve",
                 disabled: () => appContext.currentPull?.approvedByMe === true,
-                hidden: () => settings.approve !== "manual" && settings.approve !== "only",
-                action: async (_, context) => {
-                    if (!appContext.currentPull) return;
-                    context.hide();
-                    process.stdout.write("Approving...");
-                    await appContext.service.approvePull(appContext.currentPull);
-                    process.stdout.write("Approved.\n\n");
-                    appContext.log.write(`[${new Date().toISOString()}] #${appContext.currentPull.number} '${appContext.currentPull.title}': Approved\n`);
+                hidden: () => !appContext.currentPull?.supportsSelfMerge && (settings.approve === "always" || settings.approve === "auto"),
+                action: async (prompt) => {
+                    const pull = appContext.currentPull;
+                    if (!pull) return;
 
-                    if (settings.approve === "only") {
-                        if (appContext.skipped.delete(appContext.currentPull.number)) {
+                    await prompt.hide();
+                    process.stdout.write("Approving...");
+                    await appContext.service.approvePull(pull);
+                    process.stdout.write("Approved.\n\n");
+                    appContext.log.write(`[${new Date().toISOString()}] #${pull.number} '${pull.title}': Approved\n`);
+
+                    if (pull.supportsSelfMerge) {
+                        if (appContext.skipped.delete(pull.number)) {
                             saveSkipped(appContext.skipped);
                         }
-                        context.close();
+                        await prompt.close();
                     }
                     else {
-                        context.refresh();
-                        context.show();
+                        await prompt.refresh();
+                        await prompt.show();
                     }
                 }
             },
             {
                 key: "m",
-                description: () => `${(settings.approve === "auto" ? !appContext.currentPull?.approvedByAll : settings.approve === "always" ? !appContext.currentPull?.approvedByMe : false) ? "approve and " : ""}merge${settings.merge ? ` using ${settings.merge === "merge" ? "merge commit" : settings.merge}` : ""}`,
-                disabled: () => settings.approve === "only",
-                hidden: () => settings.approve === "only",
-                action: async (_, context) => {
-                    if (!appContext.currentPull) return;
+                description: () => `${(settings.approve === "auto" ? !appContext.currentPull?.approvedByOwners : settings.approve === "always" ? !appContext.currentPull?.approvedByMe : false) ? "approve and " : ""}merge${settings.merge ? ` using ${settings.merge === "merge" ? "merge commit" : settings.merge}` : ""}`,
+                disabled: () => !!appContext.currentPull?.supportsSelfMerge,
+                hidden: () => !!appContext.currentPull?.supportsSelfMerge,
+                action: async (prompt) => {
+                    let pull = appContext.currentPull;
+                    if (!pull || pull.supportsSelfMerge) return;
 
-                    const pull = appContext.currentPull;
                     if (!settings.merge) {
-                        const result = await pushPrompt(mergePrompt);
-                        if (result) {
-                            context.refresh();
-                        }
+                        if (await pushPrompt(mergePrompt)) await prompt.refresh();
                         if (!settings.merge) return;
                     }
 
-                    context.hide();
+                    const result = await appContext.service.getPull(pull.number);
+                    if (result.error) return;
+
+                    pull = result.pull;
+
+                    await prompt.hide();
 
                     const merge = settings.merge;
+                    const approve = settings.approve;
                     const needsApproval =
-                        settings.approve === "auto" ? !await appContext.service.isApprovedByAll(pull) :
-                        settings.approve === "always" ? !await appContext.service.isApprovedByMe(pull) :
+                        approve === "auto" ? pull.approvedByOwners !== true || pull.approvedByMaintainer !== true :
+                        approve === "always" ? pull.approvedByMe !== true || pull.approvedByMaintainer !== true :
                         false;
 
+                    // Approve the PR if necessary
                     if (needsApproval) {
                         process.stdout.write("Approving...");
                         await appContext.service.approvePull(pull);
@@ -114,53 +113,54 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
                     appContext.log.write(`[${new Date().toISOString()}] #${pull.number} '${pull.title}': Merged using ${merge}\n`);
                     process.stdout.write("Merged.\n\n");
 
-                    if (appContext.skipped.delete(appContext.currentPull.number)) {
+                    // Remove the pull from the skipped PRs list
+                    if (appContext.skipped.delete(pull.number)) {
                         saveSkipped(appContext.skipped);
                     }
 
-                    context.close();
+                    await prompt.close();
                 }
             },
             {
                 key: "s",
                 description: "skip until there are updates to the PR.",
-                action: (_, context) => {
+                action: async (prompt) => {
                     if (appContext.currentPull) {
                         let skipDate = appContext.skipped.get(appContext.currentPull.number);
-                        if (skipDate === undefined || skipDate < Date.now()) {
+                        if (skipDate === undefined) {
                             appContext.skipped.set(appContext.currentPull.number, Date.now());
                             appContext.screen.clearPull();
-                            appContext.screen.addPull(`[${appContext.workArea!.column.offset}/${appContext.workArea?.column.cards.length}] ${appContext.currentPull.title} ${chalk.yellow("[skipped]")}.`);
+                            appContext.screen.addPull(`[${appContext.workArea!.column.offset}/${appContext.workArea?.column.cards.length}] '${appContext.currentPull.title}' ${chalk.yellow("[skipped]")}.`);
                             saveSkipped(appContext.skipped);
                         }
                     }
-                    context.close();
+                    await prompt.close();
                 }
             },
             {
                 key: "d",
                 description: "defer this PR until the end of the current column.",
                 disabled: () => !(appContext.currentPull && appContext.workArea && appContext.workArea.column.offset < appContext.workArea.column.cards.length),
-                action: (_, context) => {
+                action: async (prompt) => {
                     if (appContext.currentPull && appContext.workArea) {
                         if (appContext.workArea.column.offset > 0 &&
                             appContext.workArea.column.offset < appContext.workArea.column.cards.length &&
                             appContext.workArea.column.cards[appContext.workArea.column.offset - 1] === appContext.workArea.card) {
                             appContext.screen.clearPull();
-                            appContext.screen.addPull(`[${appContext.workArea?.column.offset}/${appContext.workArea?.column.cards.length}] ${appContext.currentPull.title} ${chalk.yellow("[deferred]")}.`);
+                            appContext.screen.addPull(`[${appContext.workArea?.column.offset}/${appContext.workArea?.column.cards.length}] '${appContext.currentPull.title}' ${chalk.yellow("[deferred]")}.`);
                             appContext.workArea.column.offset--;
                             appContext.workArea.column.cards.push(...appContext.workArea.column.cards.splice(appContext.workArea.column.offset, 1));
                         }
                     }
-                    context.close();
+                    await prompt.close();
                 }
             },
             {
                 key: "F5",
                 description: "Refresh",
                 hidden: true,
-                action: () => {
-                    appContext.screen.refresh(true);
+                action: async () => {
+                    await appContext.screen.refresh(true);
                 }
             }
         ]

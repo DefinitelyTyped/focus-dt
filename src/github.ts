@@ -1,29 +1,7 @@
-import { from } from "iterable-query";
-import { Octokit, RestEndpointMethodTypes } from "@octokit/rest";
+import { AsyncQuery, fn, from, fromAsync } from "iterable-query";
+import { Octokit } from "@octokit/rest";
 
-// Workaround for @octokit/rest removing named types for REST API responses
-declare module "@octokit/rest" {
-    namespace Octokit {
-        type Options = NonNullable<ConstructorParameters<typeof Octokit>[0]>;
-        type UsersGetAuthenticatedResponse = RestEndpointMethodTypes["users"]["getAuthenticated"]["response"]["data"];
-        type ProjectsListForRepoResponse = RestEndpointMethodTypes["projects"]["listForRepo"]["response"]["data"];
-        type ProjectsListForRepoResponseItem = ProjectsListForRepoResponse[number];
-        type ProjectsListColumnsResponse = RestEndpointMethodTypes["projects"]["listColumns"]["response"]["data"];
-        type ProjectsListColumnsResponseItem = ProjectsListColumnsResponse[number];
-        type ProjectsListCardsResponse = RestEndpointMethodTypes["projects"]["listCards"]["response"]["data"];
-        type ProjectsListCardsResponseItem = ProjectsListCardsResponse[number];
-        type PullsGetResponse = RestEndpointMethodTypes["pulls"]["get"]["response"]["data"];
-        type PullsListReviewsResponse = RestEndpointMethodTypes["pulls"]["listReviews"]["response"]["data"];
-        type PullsListReviewsResponseItem = PullsListReviewsResponse[number];
-        type TeamsListMembersResponse = RestEndpointMethodTypes["teams"]["listMembersInOrg"]["response"]["data"];
-        type TeamsListMembersResponseItem = TeamsListMembersResponse[number];
-        type PullsGetResponseLabelItem = PullsGetResponse["labels"][number];
-        type PullsListCommitsResponse = RestEndpointMethodTypes["pulls"]["listCommits"]["response"]["data"];
-        type PullsListCommitsResponseItem = PullsListCommitsResponse[number];
-        type ReposListCommitsResponse = RestEndpointMethodTypes["repos"]["listCommits"]["response"]["data"];
-        type ReposListCommitsResponseItem = ReposListCommitsResponse[number];
-    }
-}
+const MAX_EXCLUDE_TIMEOUT = 1000 * 60 * 60 * 24 * 7; // check back at least once every 7 days...
 
 /** A GitHub Project Board */
 export interface Project extends Octokit.ProjectsListForRepoResponseItem {}
@@ -34,18 +12,50 @@ export interface Column extends Octokit.ProjectsListColumnsResponseItem {}
 /** A Card in a GitHub Project Board */
 export interface Card extends Octokit.ProjectsListCardsResponseItem {}
 
+export interface Comment extends Octokit.IssuesListCommentsResponseItem {}
+
 /** A GitHub Pull Request, with some additional options */
 export interface Pull extends Octokit.PullsGetResponse {
-    /** Indicates whether the authenticated user has approved the PR */
-    approvedByMe?: boolean | "recheck";
-    /** Indicates whether all reviews are currently approvals */
-    approvedByAll?: boolean;
+    /** Indicates whether the authenticated user has approved the most recent commit to this PR */
+    approvedByMe?: boolean | "outdated";
+    /** The authenticated user's review for the PR */
+    myReview?: Review;
+    /** Indicates whether an owner for each package has approved the most recent commit to this PR */
+    approvedByOwners?: boolean | "outdated";
+    /** Review state for any package owners */
+    ownerReviews?: Review[];
+    /** Indicates whether any maintainer has approved the most recent commit to this PR. */
+    approvedByMaintainer?: boolean | "outdated";
     /** Review state for any team members */
-    teamMembersWithReviews?: TeamMemberReviewState[];
-    /** Status message lines from the DT bot */
+    maintainerReviews?: Review[];
+    /** The bot welcome comment */
+    botWelcomeComment?: Comment;
+    /** Status message lines from the DT bot welcome comment */
     botStatus?: string[];
-    lastCommit?: Commit;
+    /** JSON data included in the DT bot welcome comment */
+    botData?: BotData;
+    /** Indicates whether the PR supports self-merge */
+    supportsSelfMerge?: boolean;
+    /** A list of the most recent commits since the last time the PR was skipped. */
     recentCommits?: Commit[];
+    /** The last commit to the PR */
+    lastCommit?: Commit;
+    /** A list of the most recent comments since the last time the PR was skipped. */
+    recentComments?: Comment[];
+    /** The last comment to the PR */
+    lastComment?: Comment;
+    /** Date the PR was last updated by a non-bot user */
+    lastUpdatedAt?: string;
+}
+
+/** A GitHub Pull Request Review */
+export interface Review extends Octokit.PullsListReviewsResponseItem {
+    state: "APPROVED" | "CHANGES_REQUESTED";
+    user: Octokit.PullsListReviewsResponseItem["user"] & { login: string };
+    ownerReviewFor?: string[];
+    myReview?: boolean;
+    maintainerReview?: boolean;
+    isOutdated?: boolean;
 }
 
 /** A Commit in a GitHub Repo or Pull Request */
@@ -55,18 +65,6 @@ export interface Commit extends Octokit.PullsListCommitsResponseItem, Octokit.Re
 /** A GitHub Label */
 export interface Label extends Octokit.PullsGetResponseLabelItem {
     name: string;
-}
-
-/**
- * A Team Member's review state
- */
-export interface TeamMemberReviewState {
-    /** The GitHub Login for the team member */
-    login: string;
-    /** The review state (COMMENT and PENDING reviews are ignored) */
-    state: "APPROVED" | "CHANGES_REQUESTED";
-    /** The date the review was submitted in ISO8601-format */
-    submitted_at: string;
 }
 
 /**
@@ -87,6 +85,40 @@ export interface GetPullFailureResult {
 }
 
 export type GetPullResult = GetPullSuccessResult | GetPullFailureResult;
+
+export interface BotData {
+    type: string;
+    now: string;
+    pr_number: number;
+    author: string;
+    headCommitAbbrOid: string,
+    headCommitOid: string,
+    lastPushDate: string,
+    lastActivityDate: string,
+    maintainerBlessed: boolean,
+    hasMergeConflict: boolean,
+    isFirstContribution: boolean,
+    popularityLevel: string,
+    pkgInfo: {
+        name: string,
+        kind: string,
+        files: {
+            path: string,
+            kind: string
+        }[],
+        owners: string[],
+        addedOwners: [],
+        deletedOwners: [],
+        popularityLevel: string
+    }[],
+    reviews: {
+        type: string,
+        reviewer: string,
+        date: string,
+        abbrOid: string
+    }[],
+    ciResult: string
+}
 
 /**
  * Options for our GitHub wrapper
@@ -136,6 +168,146 @@ export class ProjectService<K extends string> {
         this._team = team;
     }
 
+    private static isReview(review: Octokit.PullsListReviewsResponseItem): review is Review {
+        return !!review.user?.login
+            && (ProjectService.reviewIsApproved(review) || ProjectService.reviewHasChangesRequested(review));
+    }
+
+    private static reviewIsApproved(review: Octokit.PullsListReviewsResponseItem): review is typeof review & { state: "APPROVED" } {
+        return review.state === "APPROVED";
+    }
+
+    private static reviewHasChangesRequested(review: Octokit.PullsListReviewsResponseItem): review is typeof review & { state: "CHANGES_REQUESTED" } {
+        return review.state === "CHANGES_REQUESTED";
+    }
+
+    private static latestReviews(reviews: Review[] | null | undefined) {
+        if (reviews) {
+            const lastReviewStates = new Map<string, Review>();
+            for (const review of reviews) {
+                if (!review.user || !review.submitted_at) continue;
+                const lastReview = lastReviewStates.get(review.user.login);
+                if (!lastReview || lastReview.submitted_at! < review.submitted_at) {
+                    lastReviewStates.set(review.user.login, review);
+                }
+            }
+            const results = [...lastReviewStates.values()];
+            if (results.length > 0) {
+                results.sort((a, b) => a.submitted_at! < b.submitted_at! ? -1 : a.submitted_at! > b.submitted_at! ? 1 : 0);
+                return results;
+            }
+        }
+        return null;
+    }
+
+    private static getOwnerReviewsCore(reviews: Review[] | null | undefined, botData: BotData | undefined, since?: string) {
+        if (!reviews || !botData) return undefined;
+        const reviewsByUser = new Map(from(reviews)
+            .groupBy(review => review.user?.login || "", fn.identity, (login, reviews) => [login, ProjectService.latestReviews(reviews.toArray())?.[0]]));
+        const ownerReviews = new Set<Review>();
+        const packageReviews = new Set<string>();
+        for (const packageInfo of botData.pkgInfo) {
+            for (const owner of new Set(packageInfo.owners)) {
+                const review = reviewsByUser.get(owner);
+                if (!review) continue;
+                if (!(ProjectService.reviewHasChangesRequested(review) || (!since || (review.submitted_at ?? "") >= since))) continue;
+                review.ownerReviewFor ??= [];
+                review.ownerReviewFor.push(packageInfo.name);
+                ownerReviews.add(review);
+                packageReviews.add(packageInfo.name);
+            }
+        }
+        return ownerReviews.size ? [...ownerReviews] : undefined;
+    }
+
+    private static getMyReviewCore(me: Octokit.UsersGetAuthenticatedResponse | null | undefined, reviews: Review[] | null | undefined) {
+        const review = me ? ProjectService.latestReviews(reviews)?.find(review => review.user.id === me.id) : undefined;
+        if (review) review.myReview = true;
+        return review;
+    }
+
+    private static getMaintainerReviewsCore(maintainers: Octokit.TeamsListMembersResponseItem[] | null | undefined, reviews: Review[] | null | undefined) {
+        const maintainerIds = maintainers && new Set(maintainers.map(member => member?.id).filter((id): id is number => typeof id === "number"));
+        if (maintainerIds) {
+            reviews = ProjectService.latestReviews(reviews);
+            if (reviews) {
+                let result: Review[] | undefined;
+                for (const review of reviews) {
+                    if (!maintainerIds.has(review.user.id)) continue;
+                    review.maintainerReview = true;
+                    result ??= [];
+                    result.push(review);
+                }
+                return result;
+            }
+        }
+    }
+
+    private static pickMostRelevantReview(left: Review | undefined, right: Review) {
+        if (!left || left === right) return right;
+        if (left.state !== right.state) {
+            // CHANGES_REQUESTED trumps APPROVED unless the CHANGES_REQUESTED is outdated and the APPROVED is not.
+            if (left.state === "CHANGES_REQUESTED") {
+                return !left.isOutdated || right.isOutdated ? left : right;
+            }
+            else {
+                return !right.isOutdated || left.isOutdated ? right : left;
+            }
+        }
+        return (left.submitted_at || "") > (right.submitted_at || "") ? left : right;
+    }
+
+    private static updatePullStatus(pull: Pull, reviews: Review[] | null | undefined, me: Octokit.UsersGetAuthenticatedResponse | undefined, maintainers: Octokit.TeamsListMembersResponse | undefined) {
+        reviews = ProjectService.latestReviews(reviews);
+        pull.approvedByMe = false;
+        if (pull.myReview = ProjectService.getMyReviewCore(me, reviews)) {
+            if (ProjectService.reviewIsApproved(pull.myReview)) {
+                pull.approvedByMe = pull.myReview.isOutdated ? "outdated" : true;
+            }
+        }
+
+        pull.approvedByOwners = false;
+        pull.ownerReviews = ProjectService.getOwnerReviewsCore(reviews, pull.botData);
+        if (pull.ownerReviews && pull.botData) {
+            const packageReviews = new Map<string, Review>();
+            for (const review of pull.ownerReviews) {
+                if (!review.ownerReviewFor) continue;
+                for (const packageName of review.ownerReviewFor) {
+                    const candidateReview = packageReviews.get(packageName);
+                    const relevantReview = ProjectService.pickMostRelevantReview(candidateReview, review);
+                    if (relevantReview !== candidateReview) packageReviews.set(packageName, relevantReview);
+                }
+            }
+            if (packageReviews.size === pull.botData.pkgInfo.length) {
+                for (const review of packageReviews.values()) {
+                    if (review.state === "CHANGES_REQUESTED") {
+                        pull.approvedByOwners = false;
+                        break;
+                    }
+                    if (review.state === "APPROVED") {
+                        if (review.isOutdated) {
+                            pull.approvedByOwners = "outdated";
+                            break;
+                        }
+                        pull.approvedByOwners = true;
+                    }
+                }
+            }
+        }
+
+        pull.approvedByMaintainer = false;
+        pull.maintainerReviews = ProjectService.getMaintainerReviewsCore(maintainers, reviews);
+        if (pull.maintainerReviews) {
+            const lastMaintainerReview = from(pull.maintainerReviews).last();
+            if (lastMaintainerReview) {
+                pull.approvedByMaintainer =
+                    lastMaintainerReview.state === "CHANGES_REQUESTED" ? false :
+                    lastMaintainerReview.isOutdated ? "outdated" :
+                    true;
+            }
+        }
+    }
+
     /**
      * Gets the current authenticated user.
      */
@@ -155,10 +327,17 @@ export class ProjectService<K extends string> {
     /**
      * Lists members of the provided team.
      */
-    async listTeamMembers(): Promise<Octokit.TeamsListMembersResponseItem[] | undefined> {
+    async listMaintainers(): Promise<Octokit.TeamsListMembersResponseItem[] | undefined> {
         if (this._teamMembers === undefined && this._team) {
             try {
-                const { data: members } = await this._github.teams.listMembersInOrg({ org: this._ownerAndRepo.owner, team_slug: this._team });
+                const members = await fromAsync(this._github.paginate.iterator(this._github.teams.listMembersInOrg, 
+                    {
+                        org: this._ownerAndRepo.owner,
+                        team_slug: this._team
+                    }))
+                    .selectMany(response => response.data)
+                    .whereDefined()
+                    .toArray();
                 this._teamMembers = members?.length ? members : null;
             }
             catch {
@@ -194,7 +373,9 @@ export class ProjectService<K extends string> {
     async getColumns() {
         const project = await this.getProject();
         if (this._columns === undefined) {
-            const { data: columnList } = await this._github.projects.listColumns({ project_id: project.id });
+            const columnList = await fromAsync(this._github.paginate.iterator(this._github.projects.listColumns, { project_id: project.id }))
+                .selectMany(response => response.data)
+                .toArray();
             const columns: Record<K, Column> = Object.create(null);
             const requestedColumns = new Set<string>(this._columnNames);
             for (const col of columnList) {
@@ -221,25 +402,101 @@ export class ProjectService<K extends string> {
      * @param oldestFirst Whether to retrieve the oldest cards first.
      */
     async getCards(column: Column, oldestFirst: boolean) {
-        let cards: Card[] = [];
-        let pageNum = 0;
-        while (true) {
-            const page = (await this._github.projects.listCards({
-                column_id: column.id,
-                per_page: 30,
-                page: pageNum
-            })).data;
-            cards = cards.concat(page);
-            if (page.length < 30) break;
-            pageNum++;
-        }
-        return from(cards)
+        return await fromAsync(this._github.paginate.iterator(this._github.projects.listCards, { column_id: column.id }))
+            .selectMany(response => response.data)
             .distinctBy(card => card.id)
             .where(card => !card.archived)
-            .through(q => oldestFirst
-                ? q.orderBy(card => card.updated_at)
-                : q.orderByDescending(card => card.updated_at))
+            [oldestFirst ? "orderBy" : "orderByDescending"](card => card.updated_at)
             .toArray();
+    }
+
+    shouldSkip(pull: Pull, exclude?: Map<number, number>) {
+        let excludeTimestamp = exclude?.get(pull.number);
+        if (!excludeTimestamp) return false; // not excluded
+        if (Date.now() >= (excludeTimestamp + MAX_EXCLUDE_TIMEOUT)) return false; // past the skip window
+        const skipUntil = new Date(excludeTimestamp).toISOString();
+        const lastUpdate = pull.lastUpdatedAt || pull.updated_at;
+        return lastUpdate < skipUntil; // updated since we skipped
+    }
+
+    /**
+     * List all the comments in a pull request.
+     * @param pull The pull request.
+     * @param since The date (in ISO8601 format) from which to start listing comments
+     */
+    async listComments(pull: Pull, since?: string) {
+        return await fromAsync(this._github.paginate.iterator(this._github.issues.listComments,
+            {
+                ...this._ownerAndRepo,
+                issue_number: pull.number,
+                since
+            }))
+            .selectMany(response => response.data)
+            .orderBy(comment => comment.created_at)
+            .toArray();
+    }
+
+    /**
+     * List all the commits in a pull request.
+     * @param pull The pull request.
+     * @param since The date (in ISO8601 format) from which to start listing commits
+     */
+    async listCommits(pull: Pull, since?: string) {
+        let query: AsyncQuery<Commit>;
+        if (pull.commits <= 250 || !pull.head.repo) {
+            // max allowed to retrieve...
+            query = fromAsync(this._github.paginate.iterator(this._github.pulls.listCommits,
+                {
+                    ...this._ownerAndRepo,
+                    pull_number: pull.number
+                }))
+                .selectMany(response => response.data);
+            if (since) {
+                query = query
+                    .where(commit => !since || (commit.commit.committer?.date || "") >= since);
+            }
+        }
+        else {
+            query = fromAsync(this._github.paginate.iterator(this._github.repos.listCommits,
+                {
+                    owner: pull.head.repo.owner.login,
+                    repo: pull.head.repo.name,
+                    sha: pull.head.sha,
+                    since
+                }))
+                .selectMany(response => response.data);
+        }
+        return await query.orderBy(commit => commit.commit.committer?.date)
+            .toArray();
+    }
+
+    /**
+     * List all the APPROVED or CHANGES REQUESTED reviews in a pull request.
+     * @param pull The pull request.
+     * @param since The date (in ISO8601 format) from which to start listing commits
+     */
+    async listReviews(pull: Pull, options?: { since?: string, latest?: boolean, lastCommit?: Commit }) {
+        const since = options?.since ?? "";
+        const latest = options?.latest;
+        const lastCommit = options?.lastCommit;
+        let reviews: Review[] | null | undefined = await fromAsync(this._github.paginate.iterator(this._github.pulls.listReviews, 
+            {
+                ...this._ownerAndRepo,
+                pull_number: pull.number,
+            }))
+            .selectMany(response => response.data)
+            .where(review => !since || (review.submitted_at ?? "") >= since)
+            .where(ProjectService.isReview)
+            .toArray();
+        if (reviews?.length && latest) {
+            reviews = ProjectService.latestReviews(reviews);
+        }
+        if (reviews?.length && lastCommit) {
+            for (const review of reviews) {
+                review.isOutdated = (review.submitted_at || "") < (lastCommit.commit.committer?.date || "");
+            }
+        }
+        return reviews?.length ? reviews : undefined;
     }
 
     /**
@@ -248,15 +505,25 @@ export class ProjectService<K extends string> {
      * @param includeDrafts Whether to include Draft PRs
      * @param includeWip Whether to include PRs marked WIP
      * @param exclude A map of PR numbers to exclude to the Date they were excluded (in milliseconds since the UNIX epoch)
-     * @param excludeTimeout A window in which updates to an excluded PR should be ignored before the PR should no longer be considered excluded.
      */
-    async getPull(card: Card, includeDrafts?: boolean, includeWip?: boolean, exclude?: Map<number, number>, excludeTimeout = 0): Promise<GetPullResult> {
+    async getPullFromCard(card: Card, includeDrafts?: boolean, includeWip?: boolean, exclude?: Map<number, number>): Promise<GetPullResult> {
         const match = /(\d+)$/.exec(card.content_url || "");
         if (!match) {
             return { error: true, message: "Could not determine pull number" };
         }
 
-        const { data: pull } = await this._github.pulls.get({ ...this._ownerAndRepo, pull_number: +match[1] });
+        return this.getPull(+match[1], includeDrafts, includeWip, exclude);
+    }
+
+    /**
+     * Gets a pull request.
+     * @param pull_number The PR number of the pull.
+     * @param includeDrafts Whether to include Draft PRs
+     * @param includeWip Whether to include PRs marked WIP
+     * @param exclude A map of PR numbers to exclude to the Date they were excluded (in milliseconds since the UNIX epoch)
+     */
+    async getPull(pull_number: number, includeDrafts?: boolean, includeWip?: boolean, exclude?: Map<number, number>): Promise<GetPullResult> {
+        const { data: pull }: { data: Pull } = await this._github.pulls.get({ ...this._ownerAndRepo, pull_number });
         if (pull.state === "closed") {
             return { error: true, message: `'${pull.title.trim()}' is closed` };
         }
@@ -271,158 +538,95 @@ export class ProjectService<K extends string> {
 
         const labels = new Map(pull.labels
             .filter((label): label is Label => !!label.name)
-            .map(label => [label.name!, label])
-        );
+            .map(label => [label.name!, label]));
 
         if (labels.has("Revision needed")) {
             return { error: true, message: `'${pull.title.trim()}' is awaiting revisions` };
         }
 
-        let excludeTimestamp = exclude?.get(pull.number);
-        if (excludeTimestamp && Date.parse(pull.updated_at) < excludeTimestamp + excludeTimeout) {
+        // fetch and organize the comments for the pull
+        const skipTimestamp = exclude?.get(pull.number);
+        const skipUntil = skipTimestamp ? new Date(skipTimestamp).toISOString() : undefined;
+        for (const comment of await this.listComments(pull)) {
+            if (comment.user?.login === "typescript-bot") {
+                if (!pull.botWelcomeComment && /<!--typescript_bot_welcome-->/i.test(comment.body || "")) {
+                    pull.botWelcomeComment = comment;
+                }
+            }
+            else {
+                pull.lastComment = comment;
+                if (skipUntil && comment.created_at > skipUntil) {
+                    pull.recentComments ??= [];
+                    pull.recentComments.push(comment);
+                }
+            }
+        }
+
+        // list commits and define the update date for the PR excluding bot updates
+        const commits = await this.listCommits(pull);
+        pull.lastCommit = from(commits).last();
+        
+        const lastCommentDate = pull.lastComment?.created_at ?? "";
+        const lastCommitDate = pull.lastCommit?.commit.committer?.date ?? "";
+        pull.lastUpdatedAt =
+            lastCommentDate > lastCommitDate ? lastCommentDate :
+            lastCommitDate > lastCommentDate ? lastCommitDate :
+            pull.updated_at;
+
+        if (this.shouldSkip(pull, exclude)) {
             return { error: true, message: `'${pull.title.trim()}' was previously skipped` };
         }
 
-        const me = await this.getAuthenticatedUser();
-        const reviews = await this.listReviews(pull);
-        const teamMembers = await this.listTeamMembers();
-        const lastCommit = await this.latestCommit(pull);
-
-        // Search for the typescript-bot comment
-        const { data: comments } = await this._github.issues.listComments({
-            ...this._ownerAndRepo,
-            issue_number: pull.number
-        });
-
-        // TODO: Make this configurable as well
-        const botComment = comments.find(comment =>
-            comment.user?.login === "typescript-bot" &&
-            /<!--typescript_bot_welcome-->/i.test(comment.body || "")
-        );
-
-        let botStatus: string[] | undefined;
-        const body = botComment?.body;
+        // find the DT bot status message
+        const body = pull.botWelcomeComment?.body;
         if (body) {
-            const match = /## Status(?:\r?\n)+((?:\s\*.*?(?:\r?\n))*)/.exec(body);
-            if (match) {
-                botStatus = match[1]
+            let match: RegExpExecArray | null;
+            if (match = /## Status(?:\r?\n)+((?:\s\*.*?(?:\r?\n))*)/.exec(body)) {
+                const botStatus = match[1]
                     .replace(/\[(.*?)\]\(.*?\)/, (_, s) => s)
                     .split(/\r?\n/g)
                     .map(s => ' ' + s.trim());
+                pull.botStatus = botStatus?.length ? botStatus : undefined;
             }
-        }
-
-        const approvedByAll = ProjectService.isApprovedByAllCore(reviews);
-        const teamMembersWithRequestedChanges = ProjectService.teamMembersWithReviewsCore(teamMembers, reviews);
-        const myApproval = ProjectService.getMyApprovalCore(me, reviews);
-        const recentCommits =
-            myApproval ? await this.commitsSince(pull, myApproval.submitted_at!) :
-            excludeTimestamp ? await this.commitsSince(pull, new Date(excludeTimestamp).toISOString()) :
-            undefined;
-        const approvedByMe = myApproval ? lastCommit && (lastCommit.commit.committer?.date || "") > (myApproval.submitted_at || "") ? "recheck" : true : false;
-        return { error: false, pull: { ...pull, approvedByMe, approvedByAll, teamMembersWithReviews: teamMembersWithRequestedChanges, botStatus, lastCommit, recentCommits }, labels: [...labels.values()] };
-    }
-
-    private async listReviews(pull: Pull) {
-        const { data: reviews } = await this._github.pulls.listReviews({ ...this._ownerAndRepo, pull_number: pull.number });
-        return reviews?.length ? reviews : null;
-    }
-
-    private static reviewIsApproved(review: Octokit.PullsListReviewsResponseItem): review is typeof review & { state: "APPROVED" } {
-        return review.state === "APPROVED";
-    }
-
-    private static reviewHasChangesRequested(review: Octokit.PullsListReviewsResponseItem): review is typeof review & { state: "CHANGES_REQUESTED" } {
-        return review.state === "CHANGES_REQUESTED";
-    }
-
-    private static latestReviews(reviews: Octokit.PullsListReviewsResponse | null | undefined) {
-        if (reviews) {
-            const lastReviewStates = new Map<string, Octokit.PullsListReviewsResponseItem>();
-            for (const review of reviews) {
-                if (!review.user || !review.submitted_at) continue;
-                const lastReview = lastReviewStates.get(review.user.login);
-                if (!lastReview || lastReview.submitted_at! < review.submitted_at) {
-                    lastReviewStates.set(review.user.login, review);
+            if (match = /\n```json\s*\n(.*)\n```\s*\n?/s.exec(body)) {
+                try {
+                    pull.botData = JSON.parse(match[1]);
                 }
+                catch {}
             }
-            const results = [...lastReviewStates.values()];
-            if (results.length > 0) {
-                results.sort((a, b) => a.submitted_at! < b.submitted_at! ? -1 : a.submitted_at! > b.submitted_at! ? 1 : 0);
-                return results;
-            }
+            pull.supportsSelfMerge = !!pull.botStatus || !!pull.botData;
         }
-        return null;
-    }
 
-    private static isApprovedByAllCore(reviews: Octokit.PullsListReviewsResponse | null | undefined) {
-        return ProjectService.latestReviews(reviews)?.every(ProjectService.reviewIsApproved) ?? false;
-    }
+        const [me, maintainers, reviews] = await Promise.all([
+            this.getAuthenticatedUser(),
+            this.listMaintainers(),
+            this.listReviews(pull, { latest: true, lastCommit: pull.lastCommit })
+        ]);
 
-    private static getMyApprovalCore(me: Octokit.UsersGetAuthenticatedResponse | null | undefined, reviews: Octokit.PullsListReviewsResponse | null | undefined) {
-        return me && ProjectService.latestReviews(reviews)?.find(review => ProjectService.reviewIsApproved(review) && review.user?.id === me.id) || false;
-    }
-
-    private static teamMembersWithReviewsCore(teamMembers: Octokit.TeamsListMembersResponseItem[] | null | undefined, reviews: Octokit.PullsListReviewsResponse | null | undefined) {
-        const memberIds = teamMembers && new Set(teamMembers.map(member => member?.id).filter((id): id is number => typeof id === "number"));
-        reviews = memberIds && ProjectService.latestReviews(reviews);
-        if (memberIds && reviews) {
-            const result: TeamMemberReviewState[] = [];
-            for (const review of reviews) {
-                if (!review.user || !memberIds.has(review.user.id)) continue;
-                if (ProjectService.reviewHasChangesRequested(review) ||
-                    ProjectService.reviewIsApproved(review)) {
-                    result.push({ login: review.user.login, state: review.state, submitted_at: review.submitted_at! });
-                }
-            }
-            if (result.length) return result;
-        }
-    }
-
-    /**
-     * Determines whether a pull has at least one review and that all reviews are marked APPROVED.
-     */
-    async isApprovedByAll(pull: Pull): Promise<boolean> {
-        return ProjectService.isApprovedByAllCore(await this.listReviews(pull));
-    }
-
-    /**
-     * Determines whether a pull has been approved by the authenticated user.
-     */
-    async isApprovedByMe(pull: Pull): Promise<boolean> {
-        const [me, reviews] = await Promise.all([this.getAuthenticatedUser(), this.listReviews(pull)]);
-        return !!ProjectService.getMyApprovalCore(me, reviews);
-    }
-
-    /**
-     * Returns a list of reviews from team members for a pull.
-     */
-    async teamMembersWithReviews(pull: Pull): Promise<TeamMemberReviewState[] | undefined> {
-        const [teamMembers, reviews] = await Promise.all([this.listTeamMembers(), this.listReviews(pull)]);
-        return ProjectService.teamMembersWithReviewsCore(teamMembers, reviews);
-    }
-
-    async commitsSince(pull: Pull, date: string) {
-        if (pull.commits > 0) {
-            const { data: commits } = await this._github.repos.listCommits({
-                owner: pull.head.repo.owner.login,
-                repo: pull.head.repo.name,
-                sha: pull.head.sha,
-                since: date
-            });
-            return commits;
-        }
+        ProjectService.updatePullStatus(pull, reviews, me, maintainers);
+        return { error: false, pull, labels: [...labels.values()] };
     }
 
     async latestCommit(pull: Pull) {
         if (pull.commits > 0) {
-            const { data: [commit] } = await this._github.repos.listCommits({
-                owner: pull.head.repo.owner.login,
-                repo: pull.head.repo.name,
-                sha: pull.head.sha,
-                per_page: 1
-            });
-            return commit;
+            if (pull.head.repo) {
+                const { data: [commit] } = await this._github.repos.listCommits({
+                    owner: pull.head.repo.owner.login,
+                    repo: pull.head.repo.name,
+                    sha: pull.head.sha,
+                    per_page: 1
+                });
+                return commit;
+            }
+            else {
+                const { data: [commit] } = await this._github.pulls.listCommits({
+                    ...this._ownerAndRepo,
+                    pull_number: pull.number,
+                    page: pull.commits - 1,
+                    per_page: 1
+                });
+                return commit;
+            }
         }
     }
 
@@ -430,29 +634,36 @@ export class ProjectService<K extends string> {
      * Approves a pull.
      */
     async approvePull(pull: Pull): Promise<void> {
-        const me = await this.getAuthenticatedUser();
-        if (ProjectService.getMyApprovalCore(me, await this.listReviews(pull))) {
+        // refresh the PR
+        const result = await this.getPull(pull.number);
+        if (result.error) return;
+        pull = result.pull;
+
+        // if we've already approved, there's nothing to do here.
+        if (pull.approvedByMe === true) {
             return;
         }
 
-        const { data: review } = await this._github.pulls.createReview({
+        const { data: draftReview } = await this._github.pulls.createReview({
             ...this._ownerAndRepo,
             pull_number: pull.number,
         });
-        if (!review) return;
+        if (!draftReview) return;
 
         await this._github.pulls.submitReview({
             ...this._ownerAndRepo,
             pull_number: pull.number,
             event: "APPROVE",
-            review_id: review.id
+            review_id: draftReview.id
         });
 
-        const teamMembers = await this.listTeamMembers();
-        const reviews = await this.listReviews(pull);
-        pull.approvedByMe = !!ProjectService.getMyApprovalCore(me, reviews);
-        pull.approvedByAll = ProjectService.isApprovedByAllCore(reviews);
-        pull.teamMembersWithReviews = ProjectService.teamMembersWithReviewsCore(teamMembers, reviews);
+        const [me, maintainers, reviews] = await Promise.all([
+            this.getAuthenticatedUser(),
+            this.listMaintainers(),
+            this.listReviews(pull, { latest: true, lastCommit: pull.lastCommit })
+        ]);
+
+        ProjectService.updatePullStatus(pull, reviews, me, maintainers);
     }
 
     /**
