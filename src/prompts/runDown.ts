@@ -64,6 +64,7 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
                         if (appContext.skipped.delete(pull.number)) {
                             saveSkipped(appContext.skipped);
                         }
+                        if (appContext.workArea) appContext.workArea.column.completedCount++;
                         await prompt.close();
                     }
                     else {
@@ -118,6 +119,7 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
                         saveSkipped(appContext.skipped);
                     }
 
+                    if (appContext.workArea) appContext.workArea.column.completedCount++;
                     await prompt.close();
                 }
             },

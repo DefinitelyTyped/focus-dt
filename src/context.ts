@@ -8,6 +8,7 @@ export interface ColumnRunDownState {
     cards: Card[];
     offset: number;
     oldestFirst: boolean;
+    completedCount: number;
 }
 
 export interface WorkArea {
