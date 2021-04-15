@@ -17,10 +17,11 @@
 import * as fs from "fs";
 import chalk from "chalk";
 import prompts = require("prompts");
-import { ProjectService, Column } from "./github";
+import colorConvert = require("color-convert");
+import { ProjectService, Column, Label } from "./github";
 import { Chrome } from "./chrome";
 import { pushPrompt, addOnQuit, isPromptVisible, hidePrompt, showPrompt, getPromptLineCount, addOnPromptSizeChange } from "./prompt";
-import { readSkipped } from "./settings";
+import { readSkipped, saveSkipped } from "./settings";
 import { Screen } from "./screen";
 import { createMergePrompt } from "./prompts/merge";
 import { createApprovalPrompt } from "./prompts/approval";
@@ -28,6 +29,7 @@ import { ColumnRunDownState, Context, WorkArea } from "./context";
 import { createFilterPrompt } from "./prompts/filter";
 import { createRunDownPrompt } from "./prompts/runDown";
 import { init } from "./init";
+import { Octokit } from "@octokit/rest";
 
 async function main() {
     let {
@@ -64,12 +66,14 @@ async function main() {
                 }
             }
         },
+        project: ProjectService.defaultProject,
+        columns: ProjectService.defaultColumns,
         owner: "DefinitelyTyped",
         repo: "DefinitelyTyped",
+        team: "typescript-team"
     });
 
-    const project = await service.getProject();
-    const columns = await service.getColumns(project);
+    const columns = await service.getColumns();
     const screen = new Screen(process.stdout, {
         getPromptLineCount,
         isPromptVisible,
@@ -82,7 +86,8 @@ async function main() {
         reviewState: undefined,
         currentPull: undefined,
         workArea: undefined,
-        skipped: new Set<number>(readSkipped()),
+        skipped: new Map<number, number>(readSkipped()?.skipped),
+        skipTimeout: 10 * 60 * 1000, // 10 minutes, in MS
         screen,
         service,
         log,
@@ -95,7 +100,7 @@ async function main() {
     const runDownPrompt = createRunDownPrompt(settings, context, filterPrompt, approvalPrompt, mergePrompt);
 
     let lastColumn: Column | undefined;
-    let lastShowOther = false;
+    let lastShowAction = false;
     let lastShowReview = false;
 
     while (true) {
@@ -108,18 +113,31 @@ async function main() {
             context.reviewState = await populateState(columns["Needs Maintainer Review"]);
         }
 
-        if (lastShowOther !== settings.needsAction || lastShowReview !== settings.needsReview) {
-            lastShowOther = settings.needsAction;
+        context.workArea = nextCard(context.reviewState) || nextCard(context.actionState);
+        if (lastShowAction !== settings.needsAction ||
+            lastShowReview !== settings.needsReview ||
+            !context.workArea ||
+            context.workArea.column.column !== lastColumn) {
+            lastShowAction = settings.needsAction;
             lastShowReview = settings.needsReview;
             screen.clearHeader();
-            screen.addHeader(`'Needs Maintainer Review' ${context.reviewState ? `count: ${context.reviewState.cards.length}` : "excluded."}`);
-            screen.addHeader(`'Needs Maintainer Action' ${context.actionState ? `count: ${context.actionState.cards.length}` : "excluded."}`);
-            screen.addHeader(`order by: ${settings.oldest ? "oldest" : "newest"} first`);
-            screen.addHeader();
+            const columnName = context.workArea?.column.column.name;
+            const column1Name = "Needs Maintainer Review";
+            const column1Selected = columnName === column1Name ? "* " : "";
+            const column1Color = column1Selected ? "bgCyan.whiteBright" : "bgGray.black";
+            const column1Count = context.reviewState?.cards.length ?? "excluded";
+            const column2Name = "Needs Maintainer Action";
+            const column2Selected = columnName === column2Name ? "* " : "";
+            const column2Color = column2Selected ? "bgCyan.whiteBright" : "bgGray.black";
+            const column2Count = context.actionState?.cards.length ?? "excluded";
+            const column1Left = column1Selected ? chalk.bgBlack.cyan("▟") : chalk.bgBlack.gray("▟");
+            const column1Right = column1Selected ? chalk.bgBlack.cyan("▙") : chalk.bgBlack.gray("▙");
+            const column2Left = column2Selected ? chalk.bgBlack.cyan("▟") : chalk.bgBlack.gray("▟");
+            const column2Right = column2Selected ? chalk.bgBlack.cyan("▙") : chalk.bgBlack.gray("▙");
+            screen.addHeader(chalk`${column1Left}{${column1Color}  ${column1Selected}${column1Name}: ${column1Count} }${column1Right} ${column2Left}{${column2Color}  ${column2Selected}${column2Name}: ${column2Count} }${column2Right} order by: ${settings.oldest ? "oldest" : "newest"} first`);
             screen.render();
         }
 
-        context.workArea = nextCard(context.reviewState) || nextCard(context.actionState);
         if (!context.workArea) {
             lastColumn = undefined;
             screen.clearProgress();
@@ -133,12 +151,10 @@ async function main() {
             if (column.column !== lastColumn) {
                 lastColumn = column.column;
                 screen.clearProgress();
-                screen.addProgress(`Column '${column.column.name}':`);
-                screen.addProgress();
                 screen.render();
             }
 
-            const result = await service.getPull(card, settings.draft, settings.wip, settings.skipped ? undefined : context.skipped);
+            const result = await service.getPullFromCard(card, settings.draft, settings.wip, settings.skipped ? undefined : context.skipped);
             if (result.error) {
                 screen.addLog(`[${column.offset}/${column.cards.length}] ${result.message}, skipping.`);
                 screen.render();
@@ -146,20 +162,70 @@ async function main() {
             }
 
             const { pull, labels } = result;
+
+            // If we previously skipped this pull and it has been updated since it was last skipped, remove it from the list of skipped PRs.
+            const skippedTimestamp = context.skipped.get(pull.number);
+            const skipMessage = skippedTimestamp && !service.shouldSkip(pull, context.skipped) ?
+                chalk`, {yellow skipped}: ${new Date(skippedTimestamp).toISOString().replace(/\.\d+Z$/, "Z")}` :
+                "";
             context.currentPull = pull;
             screen.clearPull();
             screen.addPull(`[${column.offset}/${column.cards.length}] ${pull.title}`);
-            screen.addPull(`\t${chalk.underline(chalk.cyan(pull.html_url))}${chalk.reset()}`);
-            screen.addPull(`\tupdated: ${card.updated_at}`);
-            screen.addPull(`\tapproved by you: ${pull.approvedByMe ? chalk.green("yes") : "no"}, approved: ${pull.approvedByAll ? chalk.green("yes") : "no"} `);
-            screen.addPull(`\t${[...labels].join(', ')}`);
+            screen.addPull(chalk`    {cyan.underline ${pull.html_url}}{reset }`);
+            screen.addPull(chalk`    {whiteBright Author:}  @${pull.user?.login}`);
+            screen.addPull(chalk`    {whiteBright Updated:} ${pull.lastUpdatedAt ?? pull.updated_at}${skipMessage}`);
+            screen.addPull(chalk`    {whiteBright Tags:}    ${[...labels].map(colorizeLabel).join(', ')}`);
             if (pull.botStatus) {
-                screen.addPull();
-                screen.addPull(`\t${chalk.whiteBright(`Status:`)}`);
+                screen.addPull(chalk`    {whiteBright Status:}`);
                 for (const line of pull.botStatus) {
-                    screen.addPull(`\t${line}`);
+                    if (line.trim()) screen.addPull(`    ${line}`);
                 }
             }
+            if (pull.ownerReviews) {
+                const outdated = pull.approvedByOwners === "outdated" ? chalk` {yellow [outdated]}` : "";
+                screen.addPull(chalk`    {whiteBright Owner Reviews:}${outdated}`);
+                const packages = new Set(pull.botData?.pkgInfo.map(pkg => pkg.name));
+                for (const review of pull.ownerReviews) {
+                    if (review.maintainerReview || !review.ownerReviewFor) continue;
+                    const approved = review.state === "APPROVED";
+                    const mark = approved ? "✅" : "❌";
+                    const color = approved ? "greenBright" : "redBright";
+                    const message = approved ? "approved" : "requested changes";
+                    const ownerReviewFor = `(${review.ownerReviewFor.join(", ")})`;
+                    const outdated = review.isOutdated ? chalk` {yellow [outdated]}` : "";
+                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} ${ownerReviewFor} {${color} ${message}} on ${review.submitted_at}${outdated}.`);
+                    for (const packageName of review.ownerReviewFor) {
+                        packages.delete(packageName);
+                    }
+                }
+                for (const packageName of packages) {
+                    screen.addPull(chalk`     * ❌ {whiteBright Package '${packageName}'} missing reviewer.`);
+                }
+            }
+            if (pull.maintainerReviews) {
+                const outdated = pull.approvedByMaintainer === "outdated" ? chalk` {yellow [outdated]}` : "";
+                screen.addPull(chalk`    {whiteBright Maintainer Reviews:}${outdated}`);
+                for (const review of pull.maintainerReviews) {
+                    const approved = review.state === "APPROVED";
+                    const mark = approved ? "✅" : "❌";
+                    const color = approved ? "greenBright" : "redBright";
+                    const message = approved ? "approved" : "requested changes";
+                    const outdated = review.isOutdated ? chalk` {yellow [outdated]}` : "";
+                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} {${color} ${message}} on ${review.submitted_at}${outdated}.`);
+                }
+            }
+            if (pull.recentCommits) {
+                const recentCommits = pull.recentCommits.slice(-2).sort((a, b) => 
+                    (a.commit.committer?.date || "") < (b.commit.committer?.date || "") ? -1 :
+                    (a.commit.committer?.date || "") > (b.commit.committer?.date || "") ? 1 :
+                    0);
+                screen.addPull(chalk`    {whiteBright Recent Commits${pull.approvedByMe === "outdated" ? " (since you last approved)" : ""}:}`);
+                for (const commit of recentCommits) {
+                    screen.addPull(`     * ${commit.commit.message.replace(/\n(\s*\n)+/g, "\n").replace(/\n(?!$)/g, "\n       ")}`);
+                    screen.addPull(chalk`       {whiteBright @${commit.committer?.login}} on ${commit.commit.committer?.date}`);
+                }
+            }
+            screen.addPull(" ");
             screen.render();
             await chrome.navigateTo(pull.html_url);
         }
@@ -183,5 +249,29 @@ async function main() {
         }
     }
 }
+
+function colorizeLabel(label: Label) {
+    let text = labelMap.get(label.name.toLowerCase());
+    if (text) return text;
+
+    if (label.color) {
+        const [red, green, blue] = colorConvert.hex.rgb(label.color);
+        // https://en.wikipedia.org/wiki/Relative_luminance
+        const luminosity = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+        if (luminosity > 0.3) {
+            // bright color, use as foreground
+            return chalk.hex(label.color)(label.name);
+        } else {
+            // dark color, use as background
+            return chalk.bgHex(label.color)(chalk.white(label.name));
+        }
+    }
+
+    return label.name;
+}
+
+const labelMap = new Map([
+    ["critical package", chalk.redBright("Critical package")]
+]);
 
 main().catch(e => console.error(e));

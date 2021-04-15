@@ -4,8 +4,8 @@ import { Prompt } from "../prompt";
 import { Settings } from "../settings";
 
 interface FilterPromptState {
-    checkAndMerge: boolean;
-    review: boolean;
+    needsAction: boolean;
+    needsReview: boolean;
     draft: boolean;
     wip: boolean;
     skipped: boolean;
@@ -16,30 +16,30 @@ export function createFilterPrompt(settings: Settings, appContext: Context): Pro
     return {
         title: "Filter Options",
         onEnter: ({ state }) => {
-            state.checkAndMerge = settings.needsAction;
-            state.review = settings.needsReview;
+            state.needsAction = settings.needsAction;
+            state.needsReview = settings.needsReview;
             state.draft = settings.draft;
             state.oldest = settings.oldest;
         },
         options: [
             {
-                key: "c",
-                description: ({ state }) => `${(state.checkAndMerge !== settings.needsAction ? chalk.yellow : chalk.reset)(state.checkAndMerge ? "exclude" : "include")} 'Check and Merge' column`,
-                checked: ({ state }) => state.checkAndMerge,
+                key: "r",
+                description: ({ state }) => `${(state.needsReview !== settings.needsReview ? chalk.yellow : chalk.reset)(state.needsReview ? "exclude" : "include")} 'Needs Maintainer Review' column`,
                 checkStyle: "checkbox",
-                action: (_, context) => {
-                    context.state.checkAndMerge = !context.state.checkAndMerge;
-                    context.refresh();
+                checked: ({ state }) => state.needsReview,
+                action: async (prompt) => {
+                    prompt.state.needsReview = !prompt.state.needsReview;
+                    await prompt.refresh();
                 }
             },
             {
-                key: "r",
-                description: ({ state }) => `${(state.review !== settings.needsReview ? chalk.yellow : chalk.reset)(state.review ? "exclude" : "include")} 'Review' column`,
+                key: "a",
+                description: ({ state }) => `${(state.needsAction !== settings.needsAction ? chalk.yellow : chalk.reset)(state.needsAction ? "exclude" : "include")} 'Needs Maintainer Action' column`,
                 checkStyle: "checkbox",
-                checked: ({ state }) => state.review,
-                action: (_, context) => {
-                    context.state.review = !context.state.review;
-                    context.refresh();
+                checked: ({ state }) => state.needsAction,
+                action: async (prompt) => {
+                    prompt.state.needsAction = !prompt.state.needsAction;
+                    await prompt.refresh();
                 }
             },
             {
@@ -47,9 +47,9 @@ export function createFilterPrompt(settings: Settings, appContext: Context): Pro
                 description: ({ state }) => `${(state.draft !== settings.draft ? chalk.yellow : chalk.reset)(state.draft ? "exclude" : "include")} Draft PRs`,
                 checkStyle: "checkbox",
                 checked: ({ state }) => state.draft,
-                action: (_, context) => {
-                    context.state.draft = !context.state.draft;
-                    context.refresh();
+                action: async (prompt) => {
+                    prompt.state.draft = !prompt.state.draft;
+                    await prompt.refresh();
                 }
             },
             {
@@ -57,9 +57,9 @@ export function createFilterPrompt(settings: Settings, appContext: Context): Pro
                 description: ({ state }) => `${(state.wip !== settings.wip ? chalk.yellow : chalk.reset)(state.wip ? "exclude" : "include")} Work-in-progress PRs`,
                 checkStyle: "checkbox",
                 checked: ({ state }) => state.wip,
-                action: (_, context) => {
-                    context.state.wip = !context.state.wip;
-                    context.refresh();
+                action: async (prompt) => {
+                    prompt.state.wip = !prompt.state.wip;
+                    await prompt.refresh();
                 }
             },
             {
@@ -67,9 +67,9 @@ export function createFilterPrompt(settings: Settings, appContext: Context): Pro
                 description: ({ state }) => `${(state.skipped !== settings.skipped ? chalk.yellow : chalk.reset)(state.skipped ? "exclude" : "include")} Skipped PRs`,
                 checkStyle: "checkbox",
                 checked: ({ state }) => state.skipped,
-                action: (_, context) => {
-                    context.state.skipped = !context.state.skipped;
-                    context.refresh();
+                action: async (prompt) => {
+                    prompt.state.skipped = !prompt.state.skipped;
+                    await prompt.refresh();
                 }
             },
             {
@@ -77,31 +77,31 @@ export function createFilterPrompt(settings: Settings, appContext: Context): Pro
                 description: ({ state }) => `order by ${(state.oldest !== settings.oldest ? chalk.yellow : chalk.reset)(state.oldest ? "newest" : "oldest")}`,
                 checkStyle: "checkbox",
                 checked: ({ state }) => state.oldest,
-                action: (_, context) => {
-                    context.state.oldest = !context.state.oldest;
-                    context.refresh();
+                action: async (prompt) => {
+                    prompt.state.oldest = !prompt.state.oldest;
+                    await prompt.refresh();
                 }
             },
             {
                 key: "enter",
                 description: "accept changes",
                 disabled: ({ state }) =>
-                    !!state.checkAndMerge === settings.needsAction &&
-                    !!state.review === settings.needsReview &&
+                    !!state.needsAction === settings.needsAction &&
+                    !!state.needsReview === settings.needsReview &&
                     !!state.draft === settings.draft &&
                     !!state.wip === settings.wip &&
                     !!state.skipped === settings.skipped &&
                     !!state.oldest === settings.oldest,
-                action: (_, context) => {
+                action: async (prompt) => {
                     let shouldReset = false;
-                    const { state } = context;
-                    if (!!state.checkAndMerge !== settings.needsAction) {
-                        settings.needsAction = !!state.checkAndMerge;
+                    const { state } = prompt;
+                    if (!!state.needsAction !== settings.needsAction) {
+                        settings.needsAction = !!state.needsAction;
                         appContext.actionState = undefined;
                         shouldReset = true;
                     }
-                    if (!!state.review !== settings.needsReview) {
-                        settings.needsReview = !!state.review;
+                    if (!!state.needsReview !== settings.needsReview) {
+                        settings.needsReview = !!state.needsReview;
                         appContext.reviewState = undefined;
                         shouldReset = true;
                     }
@@ -132,15 +132,13 @@ export function createFilterPrompt(settings: Settings, appContext: Context): Pro
                     if (shouldReset) {
                         appContext.chrome.reset();
                     }
-                    context.close(shouldReset);
+                    await prompt.close(shouldReset);
                 }
             },
             {
                 key: "escape",
                 description: "cancel",
-                action: (_, context) => {
-                    context.close(false);
-                }
+                action: (prompt) => prompt.close(false)
             }
         ]
     };

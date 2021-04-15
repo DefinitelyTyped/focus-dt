@@ -16,12 +16,12 @@ export function createMergePrompt(settings: Settings): Prompt<boolean, MergeProm
             {
                 key: "m",
                 description: "merge using merge commit",
-                checked: ({ state }) => state.defaultMerge === "merge",
                 checkStyle: "radio",
                 checkColor: ({ state }) => ({ color: state.defaultMerge !== "merge" && settings.merge === "merge" ? chalk.yellow : undefined }),
-                action: (_, context) => {
-                    context.state.defaultMerge = "merge";
-                    context.refresh();
+                checked: ({ state }) => state.defaultMerge === "merge",
+                action: async (prompt) => {
+                    prompt.state.defaultMerge = "merge";
+                    await prompt.refresh();
                 }
             },
             {
@@ -30,9 +30,9 @@ export function createMergePrompt(settings: Settings): Prompt<boolean, MergeProm
                 checkStyle: "radio",
                 checked: ({ state }) => state.defaultMerge === "squash",
                 checkColor: ({ state }) => ({ color: state.defaultMerge !== "squash" && settings.merge === "squash" ? chalk.yellow : undefined }),
-                action: (_, context) => {
-                    context.state.defaultMerge = "squash";
-                    context.refresh();
+                action: async (prompt) => {
+                    prompt.state.defaultMerge = "squash";
+                    await prompt.refresh();
                 }
             },
             {
@@ -41,9 +41,9 @@ export function createMergePrompt(settings: Settings): Prompt<boolean, MergeProm
                 checkStyle: "radio",
                 checked: ({ state }) => state.defaultMerge === "rebase",
                 checkColor: ({ state }) => ({ color: state.defaultMerge !== "rebase" && settings.merge === "rebase" ? chalk.yellow : undefined }),
-                action: (_, context) => {
-                    context.state.defaultMerge = "rebase";
-                    context.refresh();
+                action: async (prompt) => {
+                    prompt.state.defaultMerge = "rebase";
+                    await prompt.refresh();
                 }
             },
             {
@@ -52,25 +52,25 @@ export function createMergePrompt(settings: Settings): Prompt<boolean, MergeProm
                 checkStyle: "radio",
                 checked: ({ state }) => state.defaultMerge === undefined,
                 checkColor: ({ state }) => ({ color: state.defaultMerge !== undefined && settings.merge === undefined ? chalk.yellow : undefined }),
-                action: (_, context) => {
-                    context.state.defaultMerge = undefined;
-                    context.refresh();
+                action: async (prompt) => {
+                    prompt.state.defaultMerge = undefined;
+                    await prompt.refresh();
                 }
             },
             {
                 key: "enter",
                 description: "accept changes",
                 disabled: ({ state }) => state.defaultMerge === settings.merge,
-                action: (_, context) => {
+                action: async (prompt) => {
                     const oldDefaultMerge = settings.merge;
-                    settings.merge = context.state.defaultMerge;
-                    context.close(settings.merge !== oldDefaultMerge);
+                    settings.merge = prompt.state.defaultMerge;
+                    await prompt.close(settings.merge !== oldDefaultMerge);
                 }
             },
             {
                 key: "escape",
                 description: "cancel",
-                action: (_, context) => context.close(false)
+                action: (prompt) => prompt.close(false)
             }
         ]
     };

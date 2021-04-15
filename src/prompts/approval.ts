@@ -1,9 +1,9 @@
 import chalk from "chalk";
 import { Prompt } from "../prompt";
-import { Settings } from "../settings";
+import { ApprovalMode, Settings } from "../settings";
 
 interface ApprovalPromptState {
-    approvalMode: "manual" | "auto" | "always" | "only";
+    approvalMode: ApprovalMode;
 }
 
 export function createApprovalPrompt(settings: Settings): Prompt<boolean, ApprovalPromptState> {
@@ -15,62 +15,53 @@ export function createApprovalPrompt(settings: Settings): Prompt<boolean, Approv
         options: [
             {
                 key: "m",
-                description: "approve PRs manually.",
+                description: "approve manually.",
+                checkStyle: "radio",
                 checked: ({ state }) => state.approvalMode === "manual",
-                checkStyle: "radio",
                 checkColor: ({ state }) => ({ color: state.approvalMode !== "manual" && settings.approve === "manual" ? chalk.yellow : undefined }),
-                action: (_, context) => {
-                    context.state.approvalMode = "manual";
-                    context.refresh();
-                }
-            },
-            {
-                key: "o",
-                description: "approve PRs manually and advance (disables merge).",
-                checked: ({ state }) => state.approvalMode === "only",
-                checkStyle: "radio",
-                checkColor: ({ state }) => ({ color: state.approvalMode !== "only" && settings.approve === "only" ? chalk.yellow : undefined }),
-                action: (_, context) => {
-                    context.state.approvalMode = "only";
-                    context.refresh();
+                action: async (prompt) => {
+                    prompt.state.approvalMode = "manual";
+                    await prompt.refresh();
                 }
             },
             {
                 key: "n",
-                description: "approve PRs when merging if there are no other approvals.",
-                checked: ({ state }) => state.approvalMode === "auto",
+                description: "approve when merging if there are no other (recent) approvals by owners.",
                 checkStyle: "radio",
+                checked: ({ state }) => state.approvalMode === "auto",
                 checkColor: ({ state }) => ({ color: state.approvalMode !== "auto" && settings.approve === "auto" ? chalk.yellow : undefined }),
-                action: (_, context) => {
-                    context.state.approvalMode = "auto";
-                    context.refresh();
+                action: async (prompt) => {
+                    prompt.state.approvalMode = "auto";
+                    await prompt.refresh();
                 }
             },
             {
                 key: "a",
-                description: "approve PRs when merging if you haven't already approved.",
-                checked: ({ state }) => state.approvalMode === "always",
+                description: "approve when merging if you haven't already approved the most recent commit.",
                 checkStyle: "radio",
+                checked: ({ state }) => state.approvalMode === "always",
                 checkColor: ({ state }) => ({ color: state.approvalMode !== "always" && settings.approve === "always" ? chalk.yellow : undefined }),
-                action: (_, context) => {
-                    context.state.approvalMode = "always";
-                    context.refresh();
+                action: async (prompt) => {
+                    prompt.state.approvalMode = "always";
+                    await prompt.refresh();
                 }
             },
             {
                 key: "enter",
                 description: "accept changes",
                 disabled: ({ state }) => state.approvalMode === settings.approve,
-                action: (_, context) => {
+                action: async (prompt) => {
                     const oldApprovalMode = settings.approve;
-                    settings.approve = context.state.approvalMode ?? settings.approve;
-                    context.close(settings.approve !== oldApprovalMode);
+                    settings.approve = prompt.state.approvalMode ?? settings.approve;
+                    await prompt.close(settings.approve !== oldApprovalMode);
                 }
             },
             {
                 key: "escape",
                 description: "cancel",
-                action: (_, context) => context.close(false)
+                action: async (prompt) => {
+                    await prompt.close(false);
+                }
             }
         ]
     };

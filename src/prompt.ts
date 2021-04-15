@@ -47,7 +47,7 @@ export interface Option<R, S> {
     readonly checkColor?: { color: chalk.ChalkFunction | undefined } | Evaluatable<{ color: chalk.ChalkFunction | undefined } | undefined, R, S>;
     readonly checkStyle?: "checkbox" | "radio" | undefined | Evaluatable<"checkbox" | "radio" | undefined, R, S>;
     /** The action to execute when the option is selected. */
-    readonly action: (key: Key, context: PromptContext<R, S>) => void | PromiseLike<void>;
+    readonly action: (prompt: PromptContext<R, S>, key: Key) => void | PromiseLike<void>;
 }
 
 interface EvaluatedPrompt<R, S> {
@@ -255,18 +255,18 @@ const quitOption: Option<any, any> = {
 const advancedOption: Option<any, any> = {
     key: ["h", "?"],
     description: context => `${context.showAdvanced ? "hide" : "show"} advanced options`,
-    action: async (_, context) => {
+    action: async (prompt) => {
         const size = getPromptLineCount();
-        if (currentPrompt?.prompt === context.prompt) {
+        if (currentPrompt?.prompt === prompt.prompt) {
             await hidePrompt(false);
         }
-        context.showAdvanced = !context.showAdvanced;
-        if (currentPrompt?.prompt === context.prompt) {
+        prompt.showAdvanced = !prompt.showAdvanced;
+        if (currentPrompt?.prompt === prompt.prompt) {
             await refreshPrompt();
-            if (currentPrompt?.prompt === context.prompt && size !== getPromptLineCount()) {
+            if (currentPrompt?.prompt === prompt.prompt && size !== getPromptLineCount()) {
                 await onPromptSizeChange();
             }
-            if (currentPrompt?.prompt === context.prompt) {
+            if (currentPrompt?.prompt === prompt.prompt) {
                 await showPrompt(false);
             }
         }
@@ -343,7 +343,7 @@ function onKeypress(ch: string | undefined, _key: readline.Key | undefined) {
 
     for (const option of prompt.options) {
         if (!option.disabled && matchKey(key, option.key)) {
-            const result = option.option.action(key, prompt.context);
+            const result = option.option.action(prompt.context, key);
             if (result) {
                 Promise.resolve(result).then(() => { prompt.keypressBlocked = false; });
                 return;

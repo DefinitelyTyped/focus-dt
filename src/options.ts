@@ -110,7 +110,7 @@ export const options = yargs
             "- 'manual' - Manually approve PRs in the CLI\n" +
             "- 'auto' - Approve PRs when merging if they have no other approvers\n" +
             "- 'always' - Approve PRs when merging if you haven't already approved\n" +
-            "- 'only' - Manually approve PRs in the CLI and advance to the next item (disables merging)",
+            "- 'only' - [DEPRECATED] Manually approve PRs in the CLI and advance to the next item (disables merging)",
         type: "string",
         choices: ["manual", "auto", "always", "only"],
     })

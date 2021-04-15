@@ -20,9 +20,10 @@ export interface Context {
     reviewState: ColumnRunDownState | undefined;
     workArea: WorkArea | undefined;
     currentPull: Pull | undefined;
-    skipped: Set<number>;
+    skipped: Map<number, number>;
+    skipTimeout: number;
     screen: Screen;
-    service: ProjectService;
+    service: ProjectService<string>;
     chrome: Chrome;
     log: WriteStream;
 }
