@@ -30,6 +30,7 @@ import { createRunDownPrompt } from "./prompts/runDown";
 import { init } from "./init";
 
 async function main() {
+    process.title = "focus-dt";
     let {
         token,
         credential,
