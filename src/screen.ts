@@ -1,5 +1,5 @@
 import * as readline from "readline";
-import chalk, { Chalk } from "chalk";
+import chalk from "chalk";
 import { wordWrap } from "./wordWrap";
 
 const ESC = "\x1B";
