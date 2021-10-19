@@ -103,6 +103,16 @@ export const options = yargs
         group: "Browser options:",
         type: "string"
     })
+    .option("chromeUserDataDir", {
+        desc: "The path to your chrome user data directory.",
+        group: "Browser options:",
+        type: "string"
+    })
+    .option("chromeProfile", {
+        desc: "The name of the chrome profile you want to use.",
+        group: "Browser options:",
+        type: "string"
+    })
     .option("port", {
         desc: "The remote debugging port to use to wait for the chrome tab to exit",
         group: "Browser options:",

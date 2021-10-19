@@ -26,6 +26,8 @@ export interface Settings {
     merge: MergeMode | undefined;
     approve: ApprovalMode;
     chromePath: string | undefined;
+    chromeProfile: string | undefined;
+    chromeUserDataDir: string | undefined;
     username: string | undefined;
 }
 
@@ -50,6 +52,8 @@ export function saveSettings(settings: Settings, file = getDefaultSettingsFile()
     if (json.port === 9222) json.port = undefined;
     if (json.timeout === 10000) json.timeout = undefined;
     if (json.chromePath === "") json.chromePath = undefined;
+    if (json.chromeProfile === "") json.chromeProfile = undefined;
+    if (json.chromeUserDataDir === "") json.chromeUserDataDir = undefined;
     const settingsDir = path.dirname(file);
     try { fs.mkdirSync(settingsDir, { recursive: true }); } catch { }
     fs.writeFileSync(file, JSON.stringify(json, undefined, "  "), "utf8");
@@ -80,6 +84,8 @@ export function getDefaultSettings(): Settings {
         port: 9222,
         timeout: 10000,
         chromePath: undefined,
+        chromeProfile: undefined,
+        chromeUserDataDir: undefined,
         username: undefined
     };
 }
