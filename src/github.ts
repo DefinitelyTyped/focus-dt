@@ -1,21 +1,22 @@
 import { AsyncQuery, fn, from, fromAsync } from "iterable-query";
-import { Octokit } from "@octokit/rest";
+import { IssuesListCommentsResponseItem, Octokit, Options, ProjectsListCardsResponseItem, ProjectsListColumnsResponseItem, ProjectsListForRepoResponseItem, PullsGetResponse, PullsGetResponseLabelItem, PullsListCommitsResponseItem, PullsListReviewsResponseItem, ReposListCommitsResponseItem, TeamsListMembersResponse, TeamsListMembersResponseItem, UsersGetAuthenticatedResponse } from "@octokit/rest";
+import { approveGitCredential, GitCredential, GitUrlCredential, rejectGitCredential } from "./credentialManager";
 
 const MAX_EXCLUDE_TIMEOUT = 1000 * 60 * 60 * 24 * 7; // check back at least once every 7 days...
 
 /** A GitHub Project Board */
-export interface Project extends Octokit.ProjectsListForRepoResponseItem {}
+export interface Project extends ProjectsListForRepoResponseItem {}
 
 /** A Column in a GitHub Project Board */
-export interface Column extends Octokit.ProjectsListColumnsResponseItem {}
+export interface Column extends ProjectsListColumnsResponseItem {}
 
 /** A Card in a GitHub Project Board */
-export interface Card extends Octokit.ProjectsListCardsResponseItem {}
+export interface Card extends ProjectsListCardsResponseItem {}
 
-export interface Comment extends Octokit.IssuesListCommentsResponseItem {}
+export interface Comment extends IssuesListCommentsResponseItem {}
 
 /** A GitHub Pull Request, with some additional options */
-export interface Pull extends Octokit.PullsGetResponse {
+export interface Pull extends PullsGetResponse {
     /** Indicates whether the authenticated user has approved the most recent commit to this PR */
     approvedByMe?: boolean | "outdated";
     /** The authenticated user's review for the PR */
@@ -49,9 +50,9 @@ export interface Pull extends Octokit.PullsGetResponse {
 }
 
 /** A GitHub Pull Request Review */
-export interface Review extends Octokit.PullsListReviewsResponseItem {
+export interface Review extends PullsListReviewsResponseItem {
     state: "APPROVED" | "CHANGES_REQUESTED";
-    user: Octokit.PullsListReviewsResponseItem["user"] & { login: string };
+    user: PullsListReviewsResponseItem["user"] & { login: string };
     ownerReviewFor?: string[];
     myReview?: boolean;
     maintainerReview?: boolean;
@@ -59,11 +60,11 @@ export interface Review extends Octokit.PullsListReviewsResponseItem {
 }
 
 /** A Commit in a GitHub Repo or Pull Request */
-export interface Commit extends Octokit.PullsListCommitsResponseItem, Octokit.ReposListCommitsResponseItem {
+export interface Commit extends PullsListCommitsResponseItem, ReposListCommitsResponseItem {
 }
 
 /** A GitHub Label */
-export interface Label extends Octokit.PullsGetResponseLabelItem {
+export interface Label extends PullsGetResponseLabelItem {
     name: string;
 }
 
@@ -124,8 +125,9 @@ export interface BotData {
  * Options for our GitHub wrapper
  */
 export interface ProjectServiceOptions<K extends string> {
+    credential?: GitCredential | GitUrlCredential;
     /** Options for the GitHub REST API */
-    github: Octokit.Options;
+    github: Options;
     /** Owner of the Repo to run down */
     owner: string;
     /** Repo to run down */
@@ -143,17 +145,19 @@ export class ProjectService<K extends string> {
     static readonly defaultProject = "New Pull Request Status Board";
     static readonly defaultColumns = ["Needs Maintainer Review", "Needs Maintainer Action"] as const;
 
+    private _credential?: GitCredential | GitUrlCredential;
     private _github: Octokit;
     private _ownerAndRepo: { owner: string, repo: string };
     private _team: string | undefined;
     private _projectName: string;
     private _columnNames: readonly K[];
     private _columns: Record<K, Column> | null | undefined;
-    private _project: Octokit.ProjectsListForRepoResponseItem | null | undefined;
-    private _user: Octokit.UsersGetAuthenticatedResponse | null | undefined;
-    private _teamMembers: Octokit.TeamsListMembersResponseItem[] | null | undefined;
+    private _project: ProjectsListForRepoResponseItem | null | undefined;
+    private _user: UsersGetAuthenticatedResponse | null | undefined;
+    private _teamMembers: TeamsListMembersResponseItem[] | null | undefined;
 
     constructor(options: ProjectServiceOptions<K>) {
+        this._credential = options.credential;
         this._github = new Octokit(options.github);
         const {
             owner,
@@ -168,16 +172,16 @@ export class ProjectService<K extends string> {
         this._team = team;
     }
 
-    private static isReview(review: Octokit.PullsListReviewsResponseItem): review is Review {
+    private static isReview(review: PullsListReviewsResponseItem): review is Review {
         return !!review.user?.login
             && (ProjectService.reviewIsApproved(review) || ProjectService.reviewHasChangesRequested(review));
     }
 
-    private static reviewIsApproved(review: Octokit.PullsListReviewsResponseItem): review is typeof review & { state: "APPROVED" } {
+    private static reviewIsApproved(review: PullsListReviewsResponseItem): review is typeof review & { state: "APPROVED" } {
         return review.state === "APPROVED";
     }
 
-    private static reviewHasChangesRequested(review: Octokit.PullsListReviewsResponseItem): review is typeof review & { state: "CHANGES_REQUESTED" } {
+    private static reviewHasChangesRequested(review: PullsListReviewsResponseItem): review is typeof review & { state: "CHANGES_REQUESTED" } {
         return review.state === "CHANGES_REQUESTED";
     }
 
@@ -220,13 +224,13 @@ export class ProjectService<K extends string> {
         return ownerReviews.size ? [...ownerReviews] : undefined;
     }
 
-    private static getMyReviewCore(me: Octokit.UsersGetAuthenticatedResponse | null | undefined, reviews: Review[] | null | undefined) {
+    private static getMyReviewCore(me: UsersGetAuthenticatedResponse | null | undefined, reviews: Review[] | null | undefined) {
         const review = me ? ProjectService.latestReviews(reviews)?.find(review => review.user.id === me.id) : undefined;
         if (review) review.myReview = true;
         return review;
     }
 
-    private static getMaintainerReviewsCore(maintainers: Octokit.TeamsListMembersResponseItem[] | null | undefined, reviews: Review[] | null | undefined) {
+    private static getMaintainerReviewsCore(maintainers: TeamsListMembersResponseItem[] | null | undefined, reviews: Review[] | null | undefined) {
         const maintainerIds = maintainers && new Set(maintainers.map(member => member?.id).filter((id): id is number => typeof id === "number"));
         if (maintainerIds) {
             reviews = ProjectService.latestReviews(reviews);
@@ -257,7 +261,7 @@ export class ProjectService<K extends string> {
         return (left.submitted_at || "") > (right.submitted_at || "") ? left : right;
     }
 
-    private static updatePullStatus(pull: Pull, reviews: Review[] | null | undefined, me: Octokit.UsersGetAuthenticatedResponse | undefined, maintainers: Octokit.TeamsListMembersResponse | undefined) {
+    private static updatePullStatus(pull: Pull, reviews: Review[] | null | undefined, me: UsersGetAuthenticatedResponse | undefined, maintainers: TeamsListMembersResponse | undefined) {
         reviews = ProjectService.latestReviews(reviews);
         pull.approvedByMe = false;
         if (pull.myReview = ProjectService.getMyReviewCore(me, reviews)) {
@@ -308,13 +312,50 @@ export class ProjectService<K extends string> {
         }
     }
 
+    private _requestSucceeded(): void {
+        const credential = this._credential;
+        if (credential) {
+            this._credential = undefined;
+            approveGitCredential(credential);
+        }
+    }
+
+    private _requestFailed(): void {
+        const credential = this._credential;
+        if (credential) {
+            this._credential = undefined;
+            rejectGitCredential(credential);
+        }
+    }
+
+    private async _checkResponseWorker<T>(value: Promise<T>) {
+        let ok = false;
+        try {
+            const result = await value;
+            ok = true;
+            return result;
+        }
+        finally {
+            if (ok) {
+                this._requestSucceeded();
+            }
+            else {
+                this._requestFailed();
+            }
+        }
+    }
+
+    private _checkResponse<T>(value: Promise<T>) {
+        return this._credential ? this._checkResponseWorker(value) : value;
+    }
+
     /**
      * Gets the current authenticated user.
      */
-    async getAuthenticatedUser(): Promise<Octokit.UsersGetAuthenticatedResponse | undefined> {
+    async getAuthenticatedUser(): Promise<UsersGetAuthenticatedResponse | undefined> {
         if (this._user === undefined) {
             try {
-                const { data: user } = await this._github.users.getAuthenticated();
+                const { data: user } = await this._checkResponse(this._github.users.getAuthenticated());
                 this._user = user || null;
             }
             catch {
@@ -327,17 +368,17 @@ export class ProjectService<K extends string> {
     /**
      * Lists members of the provided team.
      */
-    async listMaintainers(): Promise<Octokit.TeamsListMembersResponseItem[] | undefined> {
+    async listMaintainers(): Promise<TeamsListMembersResponseItem[] | undefined> {
         if (this._teamMembers === undefined && this._team) {
             try {
-                const members = await fromAsync(this._github.paginate.iterator(this._github.teams.listMembersInOrg, 
+                const members = await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.teams.listMembersInOrg,
                     {
                         org: this._ownerAndRepo.owner,
                         team_slug: this._team
                     }))
                     .selectMany(response => response.data)
                     .whereDefined()
-                    .toArray();
+                    .toArray());
                 this._teamMembers = members?.length ? members : null;
             }
             catch {
@@ -353,7 +394,7 @@ export class ProjectService<K extends string> {
     async getProject() {
         if (this._project === undefined) {
             try {
-                const { data: projects } = await this._github.projects.listForRepo({ ...this._ownerAndRepo, state: "open" });
+                const { data: projects } = await this._checkResponse(this._github.projects.listForRepo({ ...this._ownerAndRepo, state: "open" }));
                 this._project = projects.find(proj => proj.name === this._projectName) || null;
             }
             catch (e) {
@@ -402,12 +443,12 @@ export class ProjectService<K extends string> {
      * @param oldestFirst Whether to retrieve the oldest cards first.
      */
     async getCards(column: Column, oldestFirst: boolean) {
-        return await fromAsync(this._github.paginate.iterator(this._github.projects.listCards, { column_id: column.id }))
+        return await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.projects.listCards, { column_id: column.id }))
             .selectMany(response => response.data)
             .distinctBy(card => card.id)
             .where(card => !card.archived)
             [oldestFirst ? "orderBy" : "orderByDescending"](card => card.updated_at)
-            .toArray();
+            .toArray());
     }
 
     shouldSkip(pull: Pull, exclude?: Map<number, number>) {
@@ -425,7 +466,7 @@ export class ProjectService<K extends string> {
      * @param since The date (in ISO8601 format) from which to start listing comments
      */
     async listComments(pull: Pull, since?: string) {
-        return await fromAsync(this._github.paginate.iterator(this._github.issues.listComments,
+        return await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.issues.listComments,
             {
                 ...this._ownerAndRepo,
                 issue_number: pull.number,
@@ -433,7 +474,7 @@ export class ProjectService<K extends string> {
             }))
             .selectMany(response => response.data)
             .orderBy(comment => comment.created_at)
-            .toArray();
+            .toArray());
     }
 
     /**
@@ -466,8 +507,8 @@ export class ProjectService<K extends string> {
                 }))
                 .selectMany(response => response.data);
         }
-        return await query.orderBy(commit => commit.commit.committer?.date)
-            .toArray();
+        return await this._checkResponse(query.orderBy(commit => commit.commit.committer?.date)
+            .toArray());
     }
 
     /**
@@ -479,7 +520,7 @@ export class ProjectService<K extends string> {
         const since = options?.since ?? "";
         const latest = options?.latest;
         const lastCommit = options?.lastCommit;
-        let reviews: Review[] | null | undefined = await fromAsync(this._github.paginate.iterator(this._github.pulls.listReviews, 
+        let reviews: Review[] | null | undefined = await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.pulls.listReviews,
             {
                 ...this._ownerAndRepo,
                 pull_number: pull.number,
@@ -487,7 +528,7 @@ export class ProjectService<K extends string> {
             .selectMany(response => response.data)
             .where(review => !since || (review.submitted_at ?? "") >= since)
             .where(ProjectService.isReview)
-            .toArray();
+            .toArray());
         if (reviews?.length && latest) {
             reviews = ProjectService.latestReviews(reviews);
         }
@@ -523,7 +564,7 @@ export class ProjectService<K extends string> {
      * @param exclude A map of PR numbers to exclude to the Date they were excluded (in milliseconds since the UNIX epoch)
      */
     async getPull(pull_number: number, includeDrafts?: boolean, includeWip?: boolean, exclude?: Map<number, number>): Promise<GetPullResult> {
-        const { data: pull }: { data: Pull } = await this._github.pulls.get({ ...this._ownerAndRepo, pull_number });
+        const { data: pull }: { data: Pull } = await this._checkResponse(this._github.pulls.get({ ...this._ownerAndRepo, pull_number }));
         if (pull.state === "closed") {
             return { error: true, message: `'${pull.title.trim()}' is closed` };
         }
@@ -565,7 +606,7 @@ export class ProjectService<K extends string> {
         // list commits and define the update date for the PR excluding bot updates
         const commits = await this.listCommits(pull);
         pull.lastCommit = from(commits).last();
-        
+
         const lastCommentDate = pull.lastComment?.created_at ?? "";
         const lastCommitDate = pull.lastCommit?.commit.committer?.date ?? "";
         pull.lastUpdatedAt =
@@ -610,21 +651,21 @@ export class ProjectService<K extends string> {
     async latestCommit(pull: Pull) {
         if (pull.commits > 0) {
             if (pull.head.repo) {
-                const { data: [commit] } = await this._github.repos.listCommits({
+                const { data: [commit] } = await this._checkResponse(this._github.repos.listCommits({
                     owner: pull.head.repo.owner.login,
                     repo: pull.head.repo.name,
                     sha: pull.head.sha,
                     per_page: 1
-                });
+                }));
                 return commit;
             }
             else {
-                const { data: [commit] } = await this._github.pulls.listCommits({
+                const { data: [commit] } = await this._checkResponse(this._github.pulls.listCommits({
                     ...this._ownerAndRepo,
                     pull_number: pull.number,
                     page: pull.commits - 1,
                     per_page: 1
-                });
+                }));
                 return commit;
             }
         }
@@ -644,18 +685,18 @@ export class ProjectService<K extends string> {
             return;
         }
 
-        const { data: draftReview } = await this._github.pulls.createReview({
+        const { data: draftReview } = await this._checkResponse(this._github.pulls.createReview({
             ...this._ownerAndRepo,
             pull_number: pull.number,
-        });
+        }));
         if (!draftReview) return;
 
-        await this._github.pulls.submitReview({
+        await this._checkResponse(this._github.pulls.submitReview({
             ...this._ownerAndRepo,
             pull_number: pull.number,
             event: "APPROVE",
             review_id: draftReview.id
-        });
+        }));
 
         const [me, maintainers, reviews] = await Promise.all([
             this.getAuthenticatedUser(),
@@ -670,10 +711,10 @@ export class ProjectService<K extends string> {
      * Merges a pull.
      */
     async mergePull(pull: Pull, method?: "merge" | "squash" | "rebase"): Promise<void> {
-        await this._github.pulls.merge({
+        await this._checkResponse(this._github.pulls.merge({
             ...this._ownerAndRepo,
             pull_number: pull.number,
             merge_method: method
-        });
+        }));
     }
 }

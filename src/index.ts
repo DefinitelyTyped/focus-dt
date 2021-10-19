@@ -16,12 +16,11 @@
 
 import * as fs from "fs";
 import chalk from "chalk";
-import prompts = require("prompts");
 import colorConvert = require("color-convert");
 import { ProjectService, Column, Label } from "./github";
 import { Chrome } from "./chrome";
 import { pushPrompt, addOnQuit, isPromptVisible, hidePrompt, showPrompt, getPromptLineCount, addOnPromptSizeChange } from "./prompt";
-import { readSkipped, saveSkipped } from "./settings";
+import { readSkipped } from "./settings";
 import { Screen } from "./screen";
 import { createMergePrompt } from "./prompts/merge";
 import { createApprovalPrompt } from "./prompts/approval";
@@ -29,17 +28,16 @@ import { ColumnRunDownState, Context, WorkArea } from "./context";
 import { createFilterPrompt } from "./prompts/filter";
 import { createRunDownPrompt } from "./prompts/runDown";
 import { init } from "./init";
-import { Octokit } from "@octokit/rest";
 
 async function main() {
+    process.title = "focus-dt";
     let {
         token,
-        username,
-        password,
+        credential,
         settings
     } = await init();
 
-    if (!token && (!username || !password)) {
+    if (!token) {
         return;
     }
 
@@ -52,20 +50,8 @@ async function main() {
     });
 
     const service = new ProjectService({
-        github: {
-            auth: token || {
-                username: username!,
-                password: password!,
-                async on2fa() {
-                    const { otp } = await prompts({
-                        type: "text",
-                        name: "otp",
-                        message: "GitHub 2FA code"
-                    }, { onCancel() { process.exit(1); } });
-                    return otp;
-                }
-            }
-        },
+        credential,
+        github: { auth: token },
         project: ProjectService.defaultProject,
         columns: ProjectService.defaultColumns,
         owner: "DefinitelyTyped",
@@ -73,6 +59,7 @@ async function main() {
         team: "typescript-team"
     });
 
+    credential = undefined;
     const columns = await service.getColumns();
     const screen = new Screen(process.stdout, {
         getPromptLineCount,
@@ -102,6 +89,8 @@ async function main() {
     let lastColumn: Column | undefined;
     let lastShowAction = false;
     let lastShowReview = false;
+    let lastColumn1CompletedCount: number | undefined;
+    let lastColumn2CompletedCount: number | undefined;
 
     while (true) {
         context.currentPull = undefined;
@@ -113,23 +102,29 @@ async function main() {
             context.reviewState = await populateState(columns["Needs Maintainer Review"]);
         }
 
-        context.workArea = nextCard(context.reviewState) || nextCard(context.actionState);
+        const column1 = context.reviewState;
+        const column2 = context.actionState;
+        context.workArea = nextCard(column1) || nextCard(column2);
         if (lastShowAction !== settings.needsAction ||
             lastShowReview !== settings.needsReview ||
             !context.workArea ||
-            context.workArea.column.column !== lastColumn) {
+            context.workArea.column.column !== lastColumn ||
+            lastColumn1CompletedCount !== column1?.completedCount ||
+            lastColumn2CompletedCount !== column2?.completedCount) {
             lastShowAction = settings.needsAction;
             lastShowReview = settings.needsReview;
+            lastColumn1CompletedCount = column1?.completedCount;
+            lastColumn2CompletedCount = column2?.completedCount;
             screen.clearHeader();
             const columnName = context.workArea?.column.column.name;
             const column1Name = "Needs Maintainer Review";
             const column1Selected = columnName === column1Name ? "* " : "";
             const column1Color = column1Selected ? "bgCyan.whiteBright" : "bgGray.black";
-            const column1Count = context.reviewState?.cards.length ?? "excluded";
+            const column1Count = column1 ? column1Selected || lastColumn1CompletedCount ? `${lastColumn1CompletedCount || 0}/${column1.cards.length}` : column1.cards.length : "excluded";
             const column2Name = "Needs Maintainer Action";
             const column2Selected = columnName === column2Name ? "* " : "";
             const column2Color = column2Selected ? "bgCyan.whiteBright" : "bgGray.black";
-            const column2Count = context.actionState?.cards.length ?? "excluded";
+            const column2Count = column2 ? column2Selected || lastColumn2CompletedCount ? `${lastColumn2CompletedCount || 0}/${column2.cards.length}` : column2.cards.length : "excluded";
             const column1Left = column1Selected ? chalk.bgBlack.cyan("▟") : chalk.bgBlack.gray("▟");
             const column1Right = column1Selected ? chalk.bgBlack.cyan("▙") : chalk.bgBlack.gray("▙");
             const column2Left = column2Selected ? chalk.bgBlack.cyan("▟") : chalk.bgBlack.gray("▟");
@@ -240,7 +235,7 @@ async function main() {
 
     async function populateState(column: Column): Promise<ColumnRunDownState> {
         const cards = await service.getCards(column, settings.oldest);
-        return { column: column, cards, offset: 0, oldestFirst: settings.oldest };
+        return { column: column, cards, offset: 0, oldestFirst: settings.oldest, completedCount: 0 };
     }
 
     function nextCard(column: ColumnRunDownState | undefined): WorkArea | undefined {

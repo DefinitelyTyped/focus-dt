@@ -20,32 +20,15 @@ import { getDefaultSettingsFile, readSettings } from "./settings";
 export const options = yargs
     .usage("$0 [options]")
     // authentication
-    .option("token", {
-        desc: "GitHub Auth Token. Uses %GITHUB_API_TOKEN%, %FOCUS_DT_GITHUB_API_TOKEN%, or %AUTH_TOKEN% (in that order) if available",
-        group: "Authentication options:",
-        conflicts: ["username", "password"],
-        type: "string",
-    })
     .option("username", {
         desc: "GitHub Username",
         group: "Authentication options:",
-        conflicts: ["token"],
-        implies: "password",
         type: "string",
     })
-    .option("password", {
-        desc: "GitHub Password",
+    .option("token", {
+        desc: "GitHub Auth Token. Uses %GITHUB_API_TOKEN%, %FOCUS_DT_GITHUB_API_TOKEN%, or %AUTH_TOKEN% (in that order) if available",
         group: "Authentication options:",
-        conflicts: ["token"],
-        implies: "username",
         type: "string",
-    })
-    .option("useCredentialManager", {
-        desc: "Use 'git credential' to load/save the credential to use",
-        group: "Authentication options:",
-        conflicts: ["token", "password"],
-        type: "boolean",
-        alias: "C",
     })
     // configuration
     .option("config", {

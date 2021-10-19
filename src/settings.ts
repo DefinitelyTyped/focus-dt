@@ -26,6 +26,7 @@ export interface Settings {
     merge: MergeMode | undefined;
     approve: ApprovalMode;
     chromePath: string | undefined;
+    username: string | undefined;
 }
 
 export function getDefaultSettingsFile() {
@@ -78,7 +79,8 @@ export function getDefaultSettings(): Settings {
         merge: undefined,
         port: 9222,
         timeout: 10000,
-        chromePath: undefined
+        chromePath: undefined,
+        username: undefined
     };
 }
 
