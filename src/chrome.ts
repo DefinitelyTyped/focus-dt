@@ -41,17 +41,21 @@ export async function getChromePath() {
 
 export class Chrome extends EventEmitter {
     private _path: string | undefined;
+    private _userDataDir: string | undefined;
+    private _userProfile: string | undefined;
     private _port: number;
     private _timeout: number;
     private _opening = false;
     private _proc: ChildProcess | undefined;
     private _connection!: chromeConnection.ChromeConnection;
 
-    constructor(port: number | "random", timeout: number, path?: string) {
+    constructor(port: number | "random", timeout: number, path?: string, userDataDir?: string, userProfile?: string) {
         super();
         this._port = port === "random" ? getRandomPort() : port;
         this._timeout = timeout;
         this._path = path;
+        this._userDataDir = userDataDir;
+        this._userProfile = userProfile;
     }
 
     get isOpen() {
@@ -82,13 +86,20 @@ export class Chrome extends EventEmitter {
             this._connection = undefined!;
 
             const chromePath = this._path ?? (this._path = await getChromePath());
-            const proc = spawn(chromePath, [
+            const chromeArgs = [
                 '--no-first-run',
                 '--no-default-browser-check',
                 '--enable-automation',
                 `--remote-debugging-port=${this._port}`,
                 url,
-            ], { detached: true });
+            ];
+            if (this._userDataDir) {
+                chromeArgs.push(`--user-data-dir=${this._userDataDir}`);
+            }
+            if (this._userProfile) {
+                chromeArgs.push(`--profile-directory=${this._userProfile}`);
+            }
+            const proc = spawn(chromePath, chromeArgs, { detached: true });
             proc.unref();
 
             const connection = new chromeConnection.ChromeConnection(undefined, undefined);

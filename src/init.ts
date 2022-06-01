@@ -21,6 +21,8 @@ export async function init() {
         timeout = defaults.timeout,
         username = defaults.username,
         chromePath,
+        chromeProfile,
+        chromeUserDataDir
     } = argv;
 
     if (port <= 0) port = "random";
@@ -69,6 +71,8 @@ export async function init() {
         merge: defaultMerge,
         approve: approvalMode,
         chromePath: chromePath ?? await getChromePath(),
+        chromeProfile,
+        chromeUserDataDir,
         username
     };
 
