@@ -60,26 +60,30 @@ export class Screen {
         return this.logStart + this.writtenLogLines.lines.length;
     }
 
-    clearHeader() {
-        this.headerLines.length = 0;
-        this.resetSection(this.writtenProgressLines);
-        this.clearProgress();
+    private _clear({ clearHeader = false, clearProgress = false, clearLog = false, clearPull = false }) {
+        if (clearHeader || clearProgress || clearLog || clearPull) this.resetSection(this.writtenPullLines);
+        if (clearHeader || clearProgress || clearLog) this.resetSection(this.writtenLogLines);
+        if (clearHeader || clearProgress) this.resetSection(this.writtenProgressLines);
+        if (clearHeader) this.headerLines.length = 0;
+        if (clearProgress) this.progressLines.length = 0;
+        if (clearLog) this.logLines.length = 0;
+        if (clearPull) this.pullLines.length = 0;
     }
 
-    clearProgress() {
-        this.progressLines.length = 0;
-        this.resetSection(this.writtenLogLines);
-        this.clearLog();
+    clearHeader({ clearProgress = true, clearLog = true, clearPull = true } = {}) {
+        this._clear({ clearHeader: true, clearProgress, clearLog, clearPull });
     }
 
-    clearLog() {
-        this.logLines.length = 0;
-        this.resetSection(this.writtenPullLines);
-        this.clearPull();
+    clearProgress({ clearLog = true, clearPull = true } = {}) {
+        this._clear({ clearProgress: true, clearLog, clearPull });
+    }
+
+    clearLog({ clearPull = true } = {}) {
+        this._clear({ clearLog: true, clearPull });
     }
 
     clearPull() {
-        this.pullLines.length = 0;
+        this._clear({ clearPull: true });
     }
 
     addProgress(line: string = "") {

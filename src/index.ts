@@ -24,7 +24,7 @@ import { readSkipped } from "./settings";
 import { Screen } from "./screen";
 import { createMergePrompt } from "./prompts/merge";
 import { createApprovalPrompt } from "./prompts/approval";
-import { ColumnRunDownState, Context, WorkArea } from "./context";
+import { CardRunDownState, ColumnRunDownState, Context, WorkArea } from "./context";
 import { createFilterPrompt } from "./prompts/filter";
 import { createRunDownPrompt } from "./prompts/runDown";
 import { init } from "./init";
@@ -90,46 +90,53 @@ async function main() {
     let lastShowAction = false;
     let lastShowReview = false;
     let lastColumn1CompletedCount: number | undefined;
+    let lastColumn1SkippedCount: number | undefined;
+    let lastColumn1DeferredCount: number | undefined;
     let lastColumn2CompletedCount: number | undefined;
+    let lastColumn2SkippedCount: number | undefined;
+    let lastColumn2DeferredCount: number | undefined;
 
     while (true) {
         context.currentPull = undefined;
-        if (settings.needsAction && shouldPopulateState(context.actionState)) {
-            context.actionState = await populateState(columns["Needs Maintainer Action"]);
+        if (settings.needsAction && (shouldPopulateState(context.actionState) || context.actionState?.refresh)) {
+            context.actionState = await populateState(columns["Needs Maintainer Action"], context.actionState);
         }
 
-        if (settings.needsReview && shouldPopulateState(context.reviewState)) {
-            context.reviewState = await populateState(columns["Needs Maintainer Review"]);
+        if (settings.needsReview && (shouldPopulateState(context.reviewState) || context.actionState?.refresh)) {
+            context.reviewState = await populateState(columns["Needs Maintainer Review"], context.reviewState);
         }
 
         const column1 = context.reviewState;
         const column2 = context.actionState;
         context.workArea = nextCard(column1) || nextCard(column2);
+
         if (lastShowAction !== settings.needsAction ||
             lastShowReview !== settings.needsReview ||
             !context.workArea ||
             context.workArea.column.column !== lastColumn ||
             lastColumn1CompletedCount !== column1?.completedCount ||
-            lastColumn2CompletedCount !== column2?.completedCount) {
+            lastColumn1SkippedCount !== column1?.skippedCount ||
+            lastColumn1DeferredCount !== column1?.deferredCount ||
+            lastColumn2CompletedCount !== column2?.completedCount ||
+            lastColumn2SkippedCount !== column2?.skippedCount ||
+            lastColumn2DeferredCount !== column2?.deferredCount
+        ) {
             lastShowAction = settings.needsAction;
             lastShowReview = settings.needsReview;
             lastColumn1CompletedCount = column1?.completedCount;
+            lastColumn1SkippedCount = column1?.skippedCount;
+            lastColumn1DeferredCount = column1?.deferredCount;
             lastColumn2CompletedCount = column2?.completedCount;
-            screen.clearHeader();
+            lastColumn2SkippedCount = column2?.skippedCount;
+            lastColumn2DeferredCount = column2?.deferredCount;
+
+            screen.clearHeader({ clearProgress: false, clearLog: false });
             const columnName = context.workArea?.column.column.name;
             const column1Name = "Needs Maintainer Review";
-            const column1Selected = columnName === column1Name ? "* " : "";
-            const column1Color = column1Selected ? "bgCyan.whiteBright" : "bgGray.black";
-            const column1Count = column1 ? column1Selected || lastColumn1CompletedCount ? `${lastColumn1CompletedCount || 0}/${column1.cards.length}` : column1.cards.length : "excluded";
             const column2Name = "Needs Maintainer Action";
-            const column2Selected = columnName === column2Name ? "* " : "";
-            const column2Color = column2Selected ? "bgCyan.whiteBright" : "bgGray.black";
-            const column2Count = column2 ? column2Selected || lastColumn2CompletedCount ? `${lastColumn2CompletedCount || 0}/${column2.cards.length}` : column2.cards.length : "excluded";
-            const column1Left = column1Selected ? chalk.bgBlack.cyan("▟") : chalk.bgBlack.gray("▟");
-            const column1Right = column1Selected ? chalk.bgBlack.cyan("▙") : chalk.bgBlack.gray("▙");
-            const column2Left = column2Selected ? chalk.bgBlack.cyan("▟") : chalk.bgBlack.gray("▟");
-            const column2Right = column2Selected ? chalk.bgBlack.cyan("▙") : chalk.bgBlack.gray("▙");
-            screen.addHeader(chalk`${column1Left}{${column1Color}  ${column1Selected}${column1Name}: ${column1Count} }${column1Right} ${column2Left}{${column2Color}  ${column2Selected}${column2Name}: ${column2Count} }${column2Right} order by: ${settings.oldest ? "oldest" : "newest"} first`);
+            const column1Text = formatTab(column1, column1Name, columnName === column1Name);
+            const column2Text = formatTab(column2, column2Name, columnName === column2Name);
+            screen.addHeader(`${column1Text} ${column2Text} order by: ${settings.oldest ? "oldest" : "newest"} first`);
             screen.render();
         }
 
@@ -149,10 +156,12 @@ async function main() {
                 screen.render();
             }
 
-            const result = await service.getPullFromCard(card, settings.draft, settings.wip, settings.skipped ? undefined : context.skipped);
+            const result = await service.getPullFromCard(card.card, settings.draft, settings.wip, settings.skipped ? undefined : context.skipped);
             if (result.error) {
                 screen.addLog(`[${column.offset}/${column.cards.length}] ${result.message}, skipping.`);
                 screen.render();
+                context.workArea.column.skippedCount++;
+                card.skipped = true;
                 continue;
             }
 
@@ -210,7 +219,7 @@ async function main() {
                 }
             }
             if (pull.recentCommits) {
-                const recentCommits = pull.recentCommits.slice(-2).sort((a, b) => 
+                const recentCommits = pull.recentCommits.slice(-2).sort((a, b) =>
                     (a.commit.committer?.date || "") < (b.commit.committer?.date || "") ? -1 :
                     (a.commit.committer?.date || "") > (b.commit.committer?.date || "") ? 1 :
                     0);
@@ -233,16 +242,91 @@ async function main() {
         return !state || state.oldestFirst !== settings.oldest;
     }
 
-    async function populateState(column: Column): Promise<ColumnRunDownState> {
+    async function populateState(column: Column, previousState: ColumnRunDownState | undefined): Promise<ColumnRunDownState> {
         const cards = await service.getCards(column, settings.oldest);
-        return { column: column, cards, offset: 0, oldestFirst: settings.oldest, completedCount: 0 };
+        const newState: ColumnRunDownState = { column, cards: cards.map(card => ({ card })), offset: 0, oldestFirst: settings.oldest, completedCount: 0, skippedCount: 0, deferredCount: 0 };
+        if (previousState?.refresh) {
+            // move previously seen, unchanged cards to the front
+            // move deferred cards to the end
+            const deferredCards: CardRunDownState[] = [];
+            const previouslySeenCards: CardRunDownState[] = [];
+            const otherCards: CardRunDownState[] = [];
+            for (const newCard of newState.cards) {
+                const prevCardIndex = previousState.cards.findIndex(prevCard => prevCard.card.id === newCard.card.id);
+                if (prevCardIndex >= 0) {
+                    const prevCard = previousState.cards[prevCardIndex];
+                    if (prevCard.deferred) {
+                        newCard.deferred = true;
+                        newState.deferredCount++;
+                        deferredCards.push(newCard);
+                        continue;
+                    }
+    
+                    if (prevCard.skipped) {
+                        newCard.skipped = true;
+                        newState.skippedCount++;
+                    }
+
+                    if (prevCardIndex <= previousState.offset) {
+                        previouslySeenCards.push(newCard);
+                    }
+                    else {
+                        otherCards.push(newCard);
+                    }
+                }
+            }
+
+            newState.cards = [
+                ...previouslySeenCards,
+                ...otherCards,
+                ...deferredCards,
+            ];
+
+            newState.offset = previouslySeenCards.length;
+        }
+        return newState;
     }
 
     function nextCard(column: ColumnRunDownState | undefined): WorkArea | undefined {
         if (column && column.offset < column.cards.length) {
-            return { column, card: column.cards[column.offset++] };
+            const card = column.cards[column.offset++];
+            if (card.deferred) {
+                column.deferredCount--;
+                card.deferred = false;
+            }
+            if (card.skipped) {
+                column.skippedCount--;
+                card.skipped = false;
+            }
+            return { column, card };
         }
     }
+}
+
+function formatTab(column: ColumnRunDownState | undefined, columnName: string, selected: boolean) {
+    const column1Selected = selected ? "* " : "";
+    const columnColor = column1Selected ? "bgCyan.whiteBright" : "bgGray.black";
+    const columnLeft = column1Selected ? chalk.cyan("▟") : chalk.gray("▟");
+    const columnRight = column1Selected ? chalk.cyan("▙") : chalk.gray("▙");
+
+    let columnCount: string;
+    if (column) {
+        columnCount = `${column.cards.length}`;
+        if (selected || column.completedCount) {
+            columnCount = `${column.completedCount || 0}/${columnCount}`;
+        }
+        if (column.deferredCount) {
+            columnCount += ` ~${column.deferredCount}`;
+        }
+        if (column.skippedCount) {
+            columnCount += ` ?${column.skippedCount}`;
+        }
+    }
+    else {
+        columnCount = "excluded";
+    }
+
+    return chalk`${columnLeft}{${columnColor}  ${column1Selected}${columnName}: ${columnCount} }${columnRight}`;
 }
 
 function colorizeLabel(label: Label) {
