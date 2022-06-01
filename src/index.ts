@@ -136,7 +136,7 @@ async function main() {
         if (!context.workArea) {
             lastColumn = undefined;
             screen.clearProgress();
-            const pluralRules = Intl.PluralRules("en-US", { type: "cardinal" });
+            const pluralRules = new Intl.PluralRules("en-US", { type: "cardinal" });
             const rule = pluralRules.select(context.skipped.size);
             screen.addProgress(context.skipped.size ? `No items remaining, but there ${rule === "one" ? "is" : "are"} ${context.skipped.size} skipped ${rule === "one" ? "item" : "items"} left to review.` : "No items remaining.");
             screen.render();
