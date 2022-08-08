@@ -3,17 +3,27 @@ import { Chrome } from "./chrome";
 import { Column, Card, Pull, ProjectService } from "./github";
 import { Screen } from "./screen";
 
+export interface CardRunDownState {
+    card: Card;
+    completed?: boolean;
+    skipped?: boolean;
+    deferred?: boolean;
+}
+
 export interface ColumnRunDownState {
     column: Column;
-    cards: Card[];
+    cards: CardRunDownState[];
     offset: number;
     oldestFirst: boolean;
     completedCount: number;
+    skippedCount: number;
+    deferredCount: number;
+    refresh?: boolean;
 }
 
 export interface WorkArea {
-    column: ColumnRunDownState;
-    card: Card;
+    readonly column: ColumnRunDownState;
+    readonly card: CardRunDownState;
 }
 
 export interface Context {

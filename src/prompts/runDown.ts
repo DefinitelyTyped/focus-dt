@@ -119,7 +119,10 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
                         saveSkipped(appContext.skipped);
                     }
 
-                    if (appContext.workArea) appContext.workArea.column.completedCount++;
+                    if (appContext.workArea) {
+                        appContext.workArea.column.completedCount++;
+                        appContext.workArea.card.completed = true;
+                    }
                     await prompt.close();
                 }
             },
@@ -131,6 +134,10 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
                         let skipDate = appContext.skipped.get(appContext.currentPull.number);
                         if (skipDate === undefined) {
                             appContext.skipped.set(appContext.currentPull.number, Date.now());
+                            if (appContext.workArea) {
+                                appContext.workArea.column.skippedCount++;
+                                appContext.workArea.card.skipped = true;
+                            }
                             appContext.screen.clearPull();
                             appContext.screen.addPull(`[${appContext.workArea!.column.offset}/${appContext.workArea?.column.cards.length}] '${appContext.currentPull.title}' ${chalk.yellow("[skipped]")}.`);
                             saveSkipped(appContext.skipped);
@@ -148,6 +155,10 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
                         if (appContext.workArea.column.offset > 0 &&
                             appContext.workArea.column.offset < appContext.workArea.column.cards.length &&
                             appContext.workArea.column.cards[appContext.workArea.column.offset - 1] === appContext.workArea.card) {
+                            if (appContext.workArea) {
+                                appContext.workArea.column.deferredCount++;
+                                appContext.workArea.card.deferred = true;
+                            }
                             appContext.screen.clearPull();
                             appContext.screen.addPull(`[${appContext.workArea?.column.offset}/${appContext.workArea?.column.cards.length}] '${appContext.currentPull.title}' ${chalk.yellow("[deferred]")}.`);
                             appContext.workArea.column.offset--;
@@ -157,12 +168,27 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
                     await prompt.close();
                 }
             },
+            // {
+            //     key: "F5",
+            //     description: "Screen refresh",
+            //     hidden: true,
+            //     action: async () => {
+            //         await appContext.screen.refresh(true);
+            //     }
+            // },
             {
                 key: "F5",
-                description: "Refresh",
+                description: "Column refresh",
                 hidden: true,
-                action: async () => {
-                    await appContext.screen.refresh(true);
+                action: async (prompt) => {
+                    if (appContext.workArea) {
+                        appContext.workArea.column.offset--;
+                        appContext.workArea.column.refresh = true;
+                    }
+                    await prompt.hide();
+                    process.stdout.write("Refreshing column...");
+                    await new Promise(resolve => setTimeout(resolve, 250));
+                    await prompt.close();
                 }
             }
         ]
