@@ -13,8 +13,6 @@ const defaultChromePaths: Partial<Record<NodeJS.Platform, string[]>> = {
 
 const indexUrl = new URL("../assets/index.html", import.meta.url).toString();
 
-// const indexUrl = `file:///${require.resolve("../assets/index.html").replace(/\\/g, "/").replace(/^\//, "")}`;
-
 export async function getChromePath() {
     let chromePath: string | undefined;
     if (process.platform === "win32") {
