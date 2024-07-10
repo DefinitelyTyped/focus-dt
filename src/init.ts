@@ -25,7 +25,7 @@ export async function init() {
         chromeUserDataDir
     } = argv;
 
-    if (port <= 0) port = "random";
+    if (typeof port === "number" && port <= 0) port = "random";
 
     if (!needsReview && !needsAction) {
         needsReview = true;

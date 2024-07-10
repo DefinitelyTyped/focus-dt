@@ -1,6 +1,6 @@
 import * as readline from "readline";
 import chalk from "chalk";
-import { default as stripAnsi } from "strip-ansi";
+import stripAnsi = require("strip-ansi");
 
 let currentPrompt: EvaluatedPrompt<any, any> | undefined;
 const promptStack: EvaluatedPrompt<any, any>[] = [];
@@ -198,7 +198,7 @@ function formatOption(option: EvaluatedOption<any, any>, prompt: EvaluatedPrompt
     if (!option.formatted) {
         const checked = hasCheckedOption(prompt) ? formatChecked(option.checked, option.checkStyle, option.checkColor?.color) : "";
         const formatted = ` ${checked}> Press ${chalk.yellow(formatKey(isArray(option.key) ? option.key[0] : option.key))} to ${option.description.replace(/\.$/, "")}.\n`;
-        option.formatted = option.disabled ? chalk.gray(stripAnsi(formatted)) : formatted;
+        option.formatted = option.disabled ? chalk.gray(stripAnsi.default(formatted)) : formatted;
     }
     return option.formatted;
 }
