@@ -1,6 +1,6 @@
 import * as readline from "readline";
 import chalk from "chalk";
-import stripAnsi from "strip-ansi";
+import { default as stripAnsi } from "strip-ansi";
 
 let currentPrompt: EvaluatedPrompt<any, any> | undefined;
 const promptStack: EvaluatedPrompt<any, any>[] = [];

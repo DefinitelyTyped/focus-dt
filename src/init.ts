@@ -1,7 +1,7 @@
-import { argv } from "./options";
-import { getDefaultSettings, getDefaultSettingsFile, saveSettings, Settings } from "./settings";
-import { getChromePath } from "./chrome";
-import { fillGitCredential, GitCredential, GitUrlCredential } from "./credentialManager";
+import { argv } from "./options.js";
+import { getDefaultSettings, getDefaultSettingsFile, saveSettings, Settings } from "./settings.js";
+import { getChromePath } from "./chrome.js";
+import { fillGitCredential, GitCredential, GitUrlCredential } from "./credentialManager.js";
 
 export async function init() {
     const defaults = getDefaultSettings();

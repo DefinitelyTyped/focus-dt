@@ -17,17 +17,18 @@
 import * as fs from "fs";
 import chalk from "chalk";
 import colorConvert = require("color-convert");
-import { ProjectService, Column, Label } from "./github";
-import { Chrome } from "./chrome";
-import { pushPrompt, addOnQuit, isPromptVisible, hidePrompt, showPrompt, getPromptLineCount, addOnPromptSizeChange } from "./prompt";
-import { readSkipped } from "./settings";
-import { Screen } from "./screen";
-import { createMergePrompt } from "./prompts/merge";
-import { createApprovalPrompt } from "./prompts/approval";
-import { CardRunDownState, ColumnRunDownState, Context, WorkArea } from "./context";
-import { createFilterPrompt } from "./prompts/filter";
-import { createRunDownPrompt } from "./prompts/runDown";
-import { init } from "./init";
+import { format as formatTimeago } from "timeago.js";
+import { ProjectService, Column, Label } from "./github.js";
+import { Chrome } from "./chrome.js";
+import { pushPrompt, addOnQuit, isPromptVisible, hidePrompt, showPrompt, getPromptLineCount, addOnPromptSizeChange } from "./prompt.js";
+import { readSkipped } from "./settings.js";
+import { Screen } from "./screen.js";
+import { createMergePrompt } from "./prompts/merge.js";
+import { createApprovalPrompt } from "./prompts/approval.js";
+import { CardRunDownState, ColumnRunDownState, Context, WorkArea } from "./context.js";
+import { createFilterPrompt } from "./prompts/filter.js";
+import { createRunDownPrompt } from "./prompts/runDown.js";
+import { init } from "./init.js";
 
 async function main() {
     process.title = "focus-dt";
@@ -71,6 +72,7 @@ async function main() {
     const context: Context = {
         actionState: undefined,
         reviewState: undefined,
+        currentState: undefined,
         currentPull: undefined,
         workArea: undefined,
         skipped: new Map<number, number>(readSkipped()?.skipped),
@@ -108,7 +110,12 @@ async function main() {
 
         const column1 = context.reviewState;
         const column2 = context.actionState;
-        context.workArea = nextCard(column1) || nextCard(column2);
+
+        context.workArea = nextCard(context.currentState);
+        if (!context.workArea) {
+            context.currentState = nextColumn();
+            context.workArea = nextCard(context.currentState);
+        }
 
         if (lastShowAction !== settings.needsAction ||
             lastShowReview !== settings.needsReview ||
@@ -177,12 +184,22 @@ async function main() {
             screen.addPull(`[${column.offset}/${column.cards.length}] ${pull.title}`);
             screen.addPull(chalk`    {cyan.underline ${pull.html_url}}{reset }`);
             screen.addPull(chalk`    {whiteBright Author:}  @${pull.user?.login}`);
-            screen.addPull(chalk`    {whiteBright Updated:} ${pull.lastUpdatedAt ?? pull.updated_at}${skipMessage}`);
+            screen.addPull(chalk`    {whiteBright Updated:} ${formatDate(pull.lastUpdatedAt ?? pull.updated_at)}${skipMessage}`);
             screen.addPull(chalk`    {whiteBright Tags:}    ${[...labels].map(colorizeLabel).join(', ')}`);
             if (pull.botStatus) {
                 screen.addPull(chalk`    {whiteBright Status:}`);
                 for (const line of pull.botStatus) {
-                    if (line.trim()) screen.addPull(`    ${line}`);
+                    if (line.trim()) {
+                        const lineText = line
+                            .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+                            .replace(/(?<=changes which affect DT infrastructure) \(((?:(?:, )?`[^`]+`)+)\)/, (_, filesText: string) => `:${
+                                filesText
+                                    .split(/, ?/g)
+                                    .map(file => `\n          📄 ${file.slice(1, -1)}`)
+                                    .join("")
+                            }`);
+                        screen.addPull(`    ${lineText}`);
+                    }
                 }
             }
             if (pull.ownerReviews) {
@@ -197,7 +214,7 @@ async function main() {
                     const message = approved ? "approved" : "requested changes";
                     const ownerReviewFor = `(${review.ownerReviewFor.join(", ")})`;
                     const outdated = review.isOutdated ? chalk` {yellow [outdated]}` : "";
-                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} ${ownerReviewFor} {${color} ${message}} on ${review.submitted_at}${outdated}.`);
+                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} ${ownerReviewFor} {${color} ${message}} on ${formatDate(review.submitted_at)}${outdated}.`);
                     for (const packageName of review.ownerReviewFor) {
                         packages.delete(packageName);
                     }
@@ -215,7 +232,7 @@ async function main() {
                     const color = approved ? "greenBright" : "redBright";
                     const message = approved ? "approved" : "requested changes";
                     const outdated = review.isOutdated ? chalk` {yellow [outdated]}` : "";
-                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} {${color} ${message}} on ${review.submitted_at}${outdated}.`);
+                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} {${color} ${message}} on ${formatDate(review.submitted_at)}${outdated}.`);
                 }
             }
             if (pull.recentCommits) {
@@ -226,7 +243,7 @@ async function main() {
                 screen.addPull(chalk`    {whiteBright Recent Commits${pull.approvedByMe === "outdated" ? " (since you last approved)" : ""}:}`);
                 for (const commit of recentCommits) {
                     screen.addPull(`     * ${commit.commit.message.replace(/\n(\s*\n)+/g, "\n").replace(/\n(?!$)/g, "\n       ")}`);
-                    screen.addPull(chalk`       {whiteBright @${commit.committer?.login}} on ${commit.commit.committer?.date}`);
+                    screen.addPull(chalk`       {whiteBright @${commit.committer?.login}} on ${formatDate(commit.commit.committer?.date)}`);
                 }
             }
             screen.addPull(" ");
@@ -287,6 +304,12 @@ async function main() {
         return newState;
     }
 
+    function nextColumn() {
+        return context.currentState === context.reviewState ?
+            context.actionState ?? context.reviewState :
+            context.reviewState ?? context.actionState;
+    }
+
     function nextCard(column: ColumnRunDownState | undefined): WorkArea | undefined {
         if (column && column.offset < column.cards.length) {
             const card = column.cards[column.offset++];
@@ -327,6 +350,31 @@ function formatTab(column: ColumnRunDownState | undefined, columnName: string, s
     }
 
     return chalk`${columnLeft}{${columnColor}  ${column1Selected}${columnName}: ${columnCount} }${columnRight}`;
+}
+
+const yearMonthDayFormat = new Intl.DateTimeFormat('en-US', {
+    dateStyle: "medium"
+});
+
+const monthDayFormat = new Intl.DateTimeFormat('en-US', {
+    month: "short",
+    day: "numeric",
+});
+
+const timeFormat = new Intl.DateTimeFormat('en-US', {
+    timeStyle: "short"
+});
+
+function formatDate(value: Date | string | number | undefined) {
+    if (value === undefined) return "";
+    if (typeof value === "number" || typeof value === "string") value = new Date(value);
+    const now = new Date();
+    const timeago = formatTimeago(value, "en_US", { relativeDate: now });
+    const fmt =
+        value.getFullYear() !== now.getFullYear() ? yearMonthDayFormat :
+        value.getMonth() !== now.getMonth() || value.getDay() !== now.getDay() ? monthDayFormat :
+        timeFormat;
+    return `${fmt.format(value)} (${timeago})`;
 }
 
 function colorizeLabel(label: Label) {

@@ -1,7 +1,7 @@
 import chalk from "chalk";
-import { Context } from "../context";
-import { Prompt } from "../prompt";
-import { Settings } from "../settings";
+import { Context } from "../context.js";
+import { Prompt } from "../prompt.js";
+import { Settings } from "../settings.js";
 
 interface FilterPromptState {
     needsAction: boolean;
