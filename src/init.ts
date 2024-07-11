@@ -65,7 +65,7 @@ export async function init() {
     if (userSuppliedToken) {
         checkRequiredScopes(status);
     }
-    else if (!status.scopes?.includes("read:project")) {
+    else if (!hasRequiredScopes(status)) {
         checkGhInstalled();
         token = ghAuthRefresh();
         status = await ghAuthStatus(token);
@@ -139,8 +139,12 @@ function checkAuthenticated(status: AuthStatus) {
     }
 }
 
+function hasRequiredScopes(status: AuthStatus) {
+    return !!status.scopes?.includes("read:project") || !status.scopes?.includes("project");
+}
+
 function checkRequiredScopes(status: AuthStatus) {
-    if (!status.scopes?.includes("read:project")) {
+    if (!hasRequiredScopes(status)) {
         failMissingRequiredScopes();
     }
 }
