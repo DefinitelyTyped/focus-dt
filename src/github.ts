@@ -14,8 +14,8 @@
    limitations under the License.
 */
 
+import type { IssuesListCommentsResponseItem, Options, ProjectsListForRepoResponseItem, PullsGetResponseLabelItem, PullsListCommitsResponseItem, PullsListReviewsResponseItem, ReposListCommitsResponseItem, TeamsListMembersResponse, TeamsListMembersResponseItem, UsersGetAuthenticatedResponse } from "@octokit/core";
 import type { RequestParameters } from "@octokit/graphql/types";
-import type { IssuesListCommentsResponseItem, Options, ProjectsListForRepoResponseItem, PullsGetResponseLabelItem, PullsListCommitsResponseItem, PullsListReviewsResponseItem, ReposListCommitsResponseItem, TeamsListMembersResponse, TeamsListMembersResponseItem, UsersGetAuthenticatedResponse } from "@octokit/rest";
 import { FragmentOf, graphql, readFragment, ResultOf, type TadaDocumentNode } from "gql.tada";
 import { print } from "graphql";
 import { AsyncQuery, fn, from, fromAsync } from "iterable-query";
