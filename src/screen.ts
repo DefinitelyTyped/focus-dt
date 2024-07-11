@@ -1,6 +1,6 @@
 import * as readline from "readline";
 import chalk from "chalk";
-import { wordWrap } from "./wordWrap";
+import { wordWrap } from "./wordWrap.js";
 
 const ESC = "\x1B";
 const CSI = `${ESC}[`;

@@ -1,7 +1,7 @@
 import { WriteStream } from "fs";
-import { Chrome } from "./chrome";
-import { Column, Card, Pull, ProjectService } from "./github";
-import { Screen } from "./screen";
+import { Chrome } from "./chrome.js";
+import { Column, Card, Pull, ProjectService } from "./github.js";
+import { Screen } from "./screen.js";
 
 export interface CardRunDownState {
     card: Card;
@@ -29,6 +29,7 @@ export interface WorkArea {
 export interface Context {
     actionState: ColumnRunDownState | undefined;
     reviewState: ColumnRunDownState | undefined;
+    currentState: ColumnRunDownState | undefined;
     workArea: WorkArea | undefined;
     currentPull: Pull | undefined;
     skipped: Map<number, number>;

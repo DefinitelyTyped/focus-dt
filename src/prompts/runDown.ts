@@ -1,7 +1,7 @@
 import chalk from "chalk";
-import { Context } from "../context";
-import { Prompt, pushPrompt } from "../prompt";
-import { saveSettings, saveSkipped, Settings } from "../settings";
+import { Context } from "../context.js";
+import { Prompt, pushPrompt } from "../prompt.js";
+import { saveSettings, saveSkipped, Settings } from "../settings.js";
 
 export function createRunDownPrompt(settings: Settings, appContext: Context, filterPrompt: Prompt<boolean>, approvalPrompt: Prompt<boolean>, mergePrompt: Prompt<boolean>): Prompt {
     return {
@@ -176,6 +176,23 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
             //         await appContext.screen.refresh(true);
             //     }
             // },
+            {
+                key: "tab",
+                description: "Switch columns",
+                hidden: true,
+                action: async (prompt) => {
+                    const nextState = appContext.currentState === appContext.reviewState ?
+                        appContext.actionState ?? appContext.reviewState :
+                        appContext.reviewState ?? appContext.actionState;
+                    if (nextState !== appContext.currentState) {
+                        appContext.currentState = nextState;
+                        if (appContext.currentState) {
+                            appContext.currentState.offset = 0;
+                        }
+                    }
+                    await prompt.close();
+                }
+            },
             {
                 key: "F5",
                 description: "Column refresh",

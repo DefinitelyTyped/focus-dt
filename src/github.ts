@@ -1,6 +1,6 @@
 import { AsyncQuery, fn, from, fromAsync } from "iterable-query";
 import { IssuesListCommentsResponseItem, Octokit, Options, ProjectsListCardsResponseItem, ProjectsListColumnsResponseItem, ProjectsListForRepoResponseItem, PullsGetResponse, PullsGetResponseLabelItem, PullsListCommitsResponseItem, PullsListReviewsResponseItem, ReposListCommitsResponseItem, TeamsListMembersResponse, TeamsListMembersResponseItem, UsersGetAuthenticatedResponse } from "@octokit/rest";
-import { approveGitCredential, GitCredential, GitUrlCredential, rejectGitCredential } from "./credentialManager";
+import { approveGitCredential, GitCredential, GitUrlCredential, rejectGitCredential } from "./credentialManager.js";
 
 const MAX_EXCLUDE_TIMEOUT = 1000 * 60 * 60 * 24 * 7; // check back at least once every 7 days...
 

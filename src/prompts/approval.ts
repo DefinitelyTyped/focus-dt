@@ -1,6 +1,6 @@
 import chalk from "chalk";
-import { Prompt } from "../prompt";
-import { ApprovalMode, Settings } from "../settings";
+import { Prompt } from "../prompt.js";
+import { ApprovalMode, Settings } from "../settings.js";
 
 interface ApprovalPromptState {
     approvalMode: ApprovalMode;

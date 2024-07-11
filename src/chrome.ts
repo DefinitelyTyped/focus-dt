@@ -1,8 +1,9 @@
-import { regQuery, HKLM } from "./registry";
+import { regQuery, HKLM } from "./registry.js";
 import { spawn, ChildProcess } from "child_process";
 import { chromeConnection } from "vscode-chrome-debug-core";
 import { existsSync } from "fs";
 import { EventEmitter } from "events";
+import { URL } from "url";
 
 const defaultChromePaths: Partial<Record<NodeJS.Platform, string[]>> = {
     win32: ["C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"],
@@ -10,7 +11,7 @@ const defaultChromePaths: Partial<Record<NodeJS.Platform, string[]>> = {
     linux: ["/usr/bin/google-chrome"],
 };
 
-const indexUrl = `file:///${require.resolve("../assets/index.html").replace(/\\/g, "/").replace(/^\//, "")}`;
+const indexUrl = new URL("../assets/index.html", import.meta.url).toString();
 
 export async function getChromePath() {
     let chromePath: string | undefined;

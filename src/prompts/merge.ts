@@ -1,6 +1,6 @@
 import chalk from "chalk";
-import { Prompt } from "../prompt";
-import { Settings } from "../settings";
+import { Prompt } from "../prompt.js";
+import { Settings } from "../settings.js";
 
 interface MergePromptState {
     defaultMerge: "merge" | "squash" | "rebase";
