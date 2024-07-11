@@ -33428,12 +33428,12 @@ type ProjectV2ActorConnection {
   """
   A list of edges.
   """
-  edges: [ProjectV2ActorEdge]
+  edges: [ProjectV2ActorEdge!]!
 
   """
   A list of nodes.
   """
-  nodes: [ProjectV2Actor]
+  nodes: [ProjectV2Actor!]!
 
   """
   Information to aid in pagination.
@@ -33488,12 +33488,12 @@ type ProjectV2Connection {
   """
   A list of edges.
   """
-  edges: [ProjectV2Edge!]
+  edges: [ProjectV2Edge!]!
 
   """
   A list of nodes.
   """
-  nodes: [ProjectV2!]
+  nodes: [ProjectV2!]!
 
   """
   Information to aid in pagination.
@@ -33638,12 +33638,12 @@ type ProjectV2FieldConfigurationConnection {
   """
   A list of edges.
   """
-  edges: [ProjectV2FieldConfigurationEdge]
+  edges: [ProjectV2FieldConfigurationEdge!]!
 
   """
   A list of nodes.
   """
-  nodes: [ProjectV2FieldConfiguration]
+  nodes: [ProjectV2FieldConfiguration!]!
 
   """
   Information to aid in pagination.
@@ -33678,12 +33678,12 @@ type ProjectV2FieldConnection {
   """
   A list of edges.
   """
-  edges: [ProjectV2FieldEdge]
+  edges: [ProjectV2FieldEdge!]!
 
   """
   A list of nodes.
   """
-  nodes: [ProjectV2Field]
+  nodes: [ProjectV2Field!]!
 
   """
   Information to aid in pagination.
@@ -33963,12 +33963,12 @@ type ProjectV2ItemConnection {
   """
   A list of edges.
   """
-  edges: [ProjectV2ItemEdge!]
+  edges: [ProjectV2ItemEdge!]!
 
   """
   A list of nodes.
   """
-  nodes: [ProjectV2Item!]
+  nodes: [ProjectV2Item!]!
 
   """
   Information to aid in pagination.
@@ -34498,12 +34498,12 @@ type ProjectV2ItemFieldValueConnection {
   """
   A list of edges.
   """
-  edges: [ProjectV2ItemFieldValueEdge]
+  edges: [ProjectV2ItemFieldValueEdge!]!
 
   """
   A list of nodes.
   """
-  nodes: [ProjectV2ItemFieldValue]
+  nodes: [ProjectV2ItemFieldValue!]!
 
   """
   Information to aid in pagination.
@@ -35598,12 +35598,12 @@ type ProjectV2ViewConnection {
   """
   A list of edges.
   """
-  edges: [ProjectV2ViewEdge]
+  edges: [ProjectV2ViewEdge!]!
 
   """
   A list of nodes.
   """
-  nodes: [ProjectV2View]
+  nodes: [ProjectV2View!]!
 
   """
   Information to aid in pagination.

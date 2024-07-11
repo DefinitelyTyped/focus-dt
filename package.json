@@ -24,21 +24,20 @@
     "node": "^20.0.0"
   },
   "devDependencies": {
-    "@octokit/rest": "^21.0.0",
+    "@0no-co/graphqlsp": "^1.12.11",
+    "@octokit/graphql-schema": "^15.25.0",
     "@types/color-convert": "^2.0.0",
     "@types/node": "^16.11.47",
     "@types/winreg": "^1.2.30",
     "@types/yargs": "^13.0.0",
-    "octokit": "^4.0.2",
     "typescript": "^5.5.3"
   },
   "dependencies": {
-    "@0no-co/graphqlsp": "^1.12.11",
-    "@octokit/graphql-schema": "^15.25.0",
     "chalk": "^3.0.0",
     "equatable": "^1.2.0",
     "gql.tada": "^1.8.2",
     "iterable-query": "^1.0.0-pre.15",
+    "octokit": "^4.0.2",
     "timeago.js": "^4.0.2",
     "vscode-chrome-debug-core": "^6.7.50",
     "winreg": "^1.2.4",

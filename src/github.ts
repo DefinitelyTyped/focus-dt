@@ -381,7 +381,6 @@ export class ProjectService<K extends string> {
                 this._project = await fromAsync(iterator)
                     .selectMany(response => response.repository?.projectsV2.nodes ?? [])
                     .select(project => readFragment<typeof ProjectV2Fragment>(project))
-                    .whereDefined()
                     .where(project => project.title === this._projectName)
                     .single();
             }
@@ -403,11 +402,9 @@ export class ProjectService<K extends string> {
                 const iterator = this._graphql.paginate.iterator(ProjectV2ViewsQuery, { ...this._ownerAndRepo, project_number });
                 this._projectViewColumnGroupByFieldName = await fromAsync(iterator)
                     .selectMany(response => response.repository?.projectV2?.views.nodes ?? [])
-                    .whereDefined()
                     .select(view => readFragment<typeof ProjectV2ViewFragment>(view))
                     .skipUntil(view => view.name === this._projectViewName).take(1)
                     .selectMany(view => view.verticalGroupByFields?.nodes ?? [])
-                    .whereDefined()
                     .where(field => field.__typename === "ProjectV2SingleSelectField")
                     .select(field => field.name)
                     .first();
@@ -429,7 +426,6 @@ export class ProjectService<K extends string> {
         const iterator = this._graphql.paginate.iterator(ProjectItemsQuery, { ...this._ownerAndRepo, project_number, column_field });
         return await fromAsync(iterator)
             .selectMany(response => response.repository?.projectV2?.items.nodes ?? [])
-            .whereDefined()
             .where(node => node.fieldValueByName?.__typename === "ProjectV2ItemFieldSingleSelectValue")
             .where(node => node.content?.__typename === "PullRequest")
             .select(node => ({
