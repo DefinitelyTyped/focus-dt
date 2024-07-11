@@ -14,27 +14,27 @@
    limitations under the License.
 */
 
-import * as fs from "fs";
 import chalk from "chalk";
-import colorConvert = require("color-convert");
+import * as fs from "fs";
+import { from } from "iterable-query";
 import { format as formatTimeago } from "timeago.js";
-import { ProjectService, Column, Label } from "./github.js";
 import { Chrome } from "./chrome.js";
-import { pushPrompt, addOnQuit, isPromptVisible, hidePrompt, showPrompt, getPromptLineCount, addOnPromptSizeChange } from "./prompt.js";
-import { readSkipped } from "./settings.js";
-import { Screen } from "./screen.js";
-import { createMergePrompt } from "./prompts/merge.js";
-import { createApprovalPrompt } from "./prompts/approval.js";
 import { CardRunDownState, ColumnRunDownState, Context, WorkArea } from "./context.js";
-import { createFilterPrompt } from "./prompts/filter.js";
-import { createRunDownPrompt } from "./prompts/runDown.js";
+import { Column, Label, ProjectItem, ProjectService } from "./github.js";
 import { init } from "./init.js";
+import { addOnPromptSizeChange, addOnQuit, getPromptLineCount, hidePrompt, isPromptVisible, pushPrompt, showPrompt } from "./prompt.js";
+import { createApprovalPrompt } from "./prompts/approval.js";
+import { createFilterPrompt } from "./prompts/filter.js";
+import { createMergePrompt } from "./prompts/merge.js";
+import { createRunDownPrompt } from "./prompts/runDown.js";
+import { Screen } from "./screen.js";
+import { readSkipped } from "./settings.js";
+import colorConvert = require("color-convert");
 
 async function main() {
     process.title = "focus-dt";
     let {
         token,
-        credential,
         settings
     } = await init();
 
@@ -51,7 +51,6 @@ async function main() {
     });
 
     const service = new ProjectService({
-        credential,
         github: { auth: token },
         project: ProjectService.defaultProject,
         columns: ProjectService.defaultColumns,
@@ -60,7 +59,6 @@ async function main() {
         team: "typescript-team"
     });
 
-    credential = undefined;
     const columns = await service.getColumns();
     const screen = new Screen(process.stdout, {
         getPromptLineCount,
@@ -88,6 +86,7 @@ async function main() {
     const mergePrompt = createMergePrompt(settings);
     const runDownPrompt = createRunDownPrompt(settings, context, filterPrompt, approvalPrompt, mergePrompt);
 
+    let projectItems: ProjectItem[] | undefined;
     let lastColumn: Column | undefined;
     let lastShowAction = false;
     let lastShowReview = false;
@@ -182,9 +181,9 @@ async function main() {
             context.currentPull = pull;
             screen.clearPull();
             screen.addPull(`[${column.offset}/${column.cards.length}] ${pull.title}`);
-            screen.addPull(chalk`    {cyan.underline ${pull.html_url}}{reset }`);
-            screen.addPull(chalk`    {whiteBright Author:}  @${pull.user?.login}`);
-            screen.addPull(chalk`    {whiteBright Updated:} ${formatDate(pull.lastUpdatedAt ?? pull.updated_at)}${skipMessage}`);
+            screen.addPull(chalk`    {cyan.underline ${pull.url}}{reset }`);
+            screen.addPull(chalk`    {whiteBright Author:}  @${pull.author?.login}`);
+            screen.addPull(chalk`    {whiteBright Updated:} ${formatDate(pull.lastUpdatedAt ?? pull.updatedAt)}${skipMessage}`);
             screen.addPull(chalk`    {whiteBright Tags:}    ${[...labels].map(colorizeLabel).join(', ')}`);
             if (pull.botStatus) {
                 screen.addPull(chalk`    {whiteBright Status:}`);
@@ -248,7 +247,7 @@ async function main() {
             }
             screen.addPull(" ");
             screen.render();
-            await chrome.navigateTo(pull.html_url);
+            await chrome.navigateTo(pull.url);
         }
 
         await pushPrompt(runDownPrompt);
@@ -260,7 +259,13 @@ async function main() {
     }
 
     async function populateState(column: Column, previousState: ColumnRunDownState | undefined): Promise<ColumnRunDownState> {
-        const cards = await service.getCards(column, settings.oldest);
+        if (!projectItems || previousState?.refresh) {
+            projectItems = await service.getProjectItems();
+        }
+        const cards = from(projectItems)
+            .where(item => item.fieldValueByName.name === column.name)
+            [settings.oldest ? "orderBy" : "orderByDescending"](item => item.content.updatedAt)
+            .toArray();
         const newState: ColumnRunDownState = { column, cards: cards.map(card => ({ card })), offset: 0, oldestFirst: settings.oldest, completedCount: 0, skippedCount: 0, deferredCount: 0 };
         if (previousState?.refresh) {
             // move previously seen, unchanged cards to the front
@@ -269,7 +274,7 @@ async function main() {
             const previouslySeenCards: CardRunDownState[] = [];
             const otherCards: CardRunDownState[] = [];
             for (const newCard of newState.cards) {
-                const prevCardIndex = previousState.cards.findIndex(prevCard => prevCard.card.id === newCard.card.id);
+                const prevCardIndex = previousState.cards.findIndex(prevCard => prevCard.card.content.number === newCard.card.content.number);
                 if (prevCardIndex >= 0) {
                     const prevCard = previousState.cards[prevCardIndex];
                     if (prevCard.deferred) {

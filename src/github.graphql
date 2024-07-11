@@ -33488,12 +33488,12 @@ type ProjectV2Connection {
   """
   A list of edges.
   """
-  edges: [ProjectV2Edge]
+  edges: [ProjectV2Edge!]
 
   """
   A list of nodes.
   """
-  nodes: [ProjectV2]
+  nodes: [ProjectV2!]
 
   """
   Information to aid in pagination.
@@ -33963,12 +33963,12 @@ type ProjectV2ItemConnection {
   """
   A list of edges.
   """
-  edges: [ProjectV2ItemEdge]
+  edges: [ProjectV2ItemEdge!]
 
   """
   A list of nodes.
   """
-  nodes: [ProjectV2Item]
+  nodes: [ProjectV2Item!]
 
   """
   Information to aid in pagination.

@@ -1,7 +1,23 @@
+/*!
+   Copyright 2019 Microsoft Corporation
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
+import { AuthStatus, ghAuthLogin, ghAuthRefresh, ghAuthStatus, ghAuthToken, ghInstalled } from "./auth.js";
+import { getChromePath } from "./chrome.js";
 import { argv } from "./options.js";
 import { getDefaultSettings, getDefaultSettingsFile, saveSettings, Settings } from "./settings.js";
-import { getChromePath } from "./chrome.js";
-import { fillGitCredential, ghAuthLogin, ghAuthRefresh, ghAuthStatus, ghAuthToken, GitCredential, GitUrlCredential } from "./credentialManager.js";
 
 export async function init() {
     const defaults = getDefaultSettings();
@@ -36,37 +52,29 @@ export async function init() {
         token = process.env.GITHUB_API_TOKEN ?? process.env.FOCUS_DT_GITHUB_API_TOKEN ?? process.env.AUTH_TOKEN;
     }
 
-    let credential: GitCredential | GitUrlCredential | undefined;
-    if (!token) {
-        // try `gh auth ...` first
-        const status = ghAuthStatus();
-        if (status) {
-            // `gh` cli is present
-            if (status.authenticated) {
-                if (!status.scopes?.includes('project')) {
-                    ghAuthRefresh();
-                }
-                token = ghAuthToken();
-            }
-            else {
-                ghAuthLogin();
-                token = ghAuthToken();
-            }
-        }
+    const userSuppliedToken = !!token;
+
+    token ??= ghAuthToken();
+    let status = await ghAuthStatus(token);
+    if (!status.authenticated) {
+        checkGhInstalled();
+        token = ghAuthLogin();
+        status = await ghAuthStatus(token);
+        checkAuthenticated(status);
+    }
+    if (userSuppliedToken) {
+        checkRequiredScopes(status);
+    }
+    else if (!status.scopes?.includes("read:project")) {
+        checkGhInstalled();
+        token = ghAuthRefresh();
+        status = await ghAuthStatus(token);
+        checkAuthenticated(status);
+        checkRequiredScopes(status);
     }
 
     if (!token) {
-        // try `git credential ...` last
-        credential = fillGitCredential({
-            protocol: "https",
-            host: "github.com",
-            path: "DefinitelyTyped/DefinitelyTyped.git",
-            username
-        });
-        if (!credential) {
-            process.exit(-1);
-        }
-        token = credential.password;
+        failNotAuthenticated();
     }
 
     const defaultMerge: "merge" | "squash" | "rebase" | undefined =
@@ -101,9 +109,38 @@ export async function init() {
         process.exit(0);
     }
 
-    return {
-        token,
-        credential,
-        settings
-    };
+    return { token, settings };
+}
+
+function failGhNotInstalled(): never {
+    console.error("Auth token not supplied. To authenticate via the command line, please ensure you have the GitHub CLI ('gh') installed.");
+    process.exit(-1);
+}
+
+function failNotAuthenticated(): never {
+    console.error("Not authenticated. Please supply an authentication token or login manually via 'gh auth login'");
+    process.exit(-1);
+}
+
+function failMissingRequiredScopes(): never {
+    console.error("Your authentication token is not authorized for the requisite scope 'read:project'. Please replace the token and try again.");
+    process.exit(-1);
+}
+
+function checkGhInstalled() {
+    if (!ghInstalled()) {
+        failGhNotInstalled();
+    }
+}
+
+function checkAuthenticated(status: AuthStatus) {
+    if (!status.authenticated) {
+        failNotAuthenticated();
+    }
+}
+
+function checkRequiredScopes(status: AuthStatus) {
+    if (!status.scopes?.includes("read:project")) {
+        failMissingRequiredScopes();
+    }
 }
