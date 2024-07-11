@@ -25,7 +25,6 @@
   },
   "devDependencies": {
     "@0no-co/graphqlsp": "^1.12.11",
-    "@octokit/graphql-schema": "^15.25.0",
     "@types/color-convert": "^2.0.0",
     "@types/node": "^16.11.47",
     "@types/winreg": "^1.2.30",
