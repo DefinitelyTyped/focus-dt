@@ -1,7 +1,7 @@
 import { argv } from "./options.js";
 import { getDefaultSettings, getDefaultSettingsFile, saveSettings, Settings } from "./settings.js";
 import { getChromePath } from "./chrome.js";
-import { fillGitCredential, GitCredential, GitUrlCredential } from "./credentialManager.js";
+import { fillGitCredential, ghAuthLogin, ghAuthRefresh, ghAuthStatus, ghAuthToken, GitCredential, GitUrlCredential } from "./credentialManager.js";
 
 export async function init() {
     const defaults = getDefaultSettings();
@@ -38,6 +38,25 @@ export async function init() {
 
     let credential: GitCredential | GitUrlCredential | undefined;
     if (!token) {
+        // try `gh auth ...` first
+        const status = ghAuthStatus();
+        if (status) {
+            // `gh` cli is present
+            if (status.authenticated) {
+                if (!status.scopes?.includes('project')) {
+                    ghAuthRefresh();
+                }
+                token = ghAuthToken();
+            }
+            else {
+                ghAuthLogin();
+                token = ghAuthToken();
+            }
+        }
+    }
+
+    if (!token) {
+        // try `git credential ...` last
         credential = fillGitCredential({
             protocol: "https",
             host: "github.com",

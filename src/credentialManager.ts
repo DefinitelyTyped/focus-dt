@@ -111,3 +111,87 @@ export function rejectGitCredential(credential: GitCredential | GitUrlCredential
     });
     return !status;
 }
+
+export interface AuthStatus {
+    authenticated?: boolean;
+    active?: boolean;
+    protocol?: string;
+    scopes?: readonly string[];
+}
+
+export function ghAuthStatus() {
+    try {
+        const { stdout, status } = spawnSync("gh", ["auth", "status", "--hostname", "github.com"], {
+            encoding: "utf8",
+            stdio: ["pipe", "pipe", "inherit"],
+            shell: true,
+            windowsVerbatimArguments: true,
+            windowsHide: true
+        });
+        if (status === 0) {
+            const authStatus: AuthStatus = {};
+            for (const [key, value] of Array.from(stdout.matchAll(/^\s* (?:- (Active account|Git operations protocol|Token(?: scopes)?):\s*(.*)|(✓ Logged in to .*))$/gm), m => m[3] ? ["authenticated", "true"] :
+                [({
+                    "Active account": "active",
+                    "Git operations protocol": "protocol",
+                    "Token": "token",
+                    "Token scopes": "scopes"
+                } as Record<string, string>)[m[1]], m[2]])) {
+                if (key in authStatus) throw new TypeError("Duplicate key");
+                switch (key) {
+                    case "authenticated":
+                        authStatus.authenticated = true;
+                        break;
+                    case "active":
+                        authStatus.active = value === "true";
+                        break;
+                    case "protocol":
+                        authStatus.protocol = value;
+                        break;
+                    case "scopes":
+                        authStatus.scopes = JSON.parse(`[${value.replaceAll(`'`, `"`)}]`);
+                        break;
+                    case "token":
+                        break;
+                    default:
+                        throw new TypeError(`Invalid key '${key}'.`);
+                }
+            }
+            return authStatus;
+        }
+    }
+    catch {
+        return undefined;
+    }
+}
+
+export function ghAuthRefresh() {
+    const { status } = spawnSync("gh", ["auth", "refresh", "--hostname", "github.com", "--scopes", "project"], {
+        stdio: "inherit",
+        shell: true,
+        windowsVerbatimArguments: true,
+        windowsHide: true
+    });
+    return status === 0;
+}
+
+export function ghAuthLogin() {
+    const { status } = spawnSync("gh", ["auth", "login", "--hostname", "github.com", "--scopes", "project", "--web"], {
+        stdio: "inherit",
+        shell: true,
+        windowsVerbatimArguments: true,
+        windowsHide: true
+    });
+    return status === 0;
+}
+
+export function ghAuthToken() {
+    const { stdout, status } = spawnSync("gh", ["auth", "token"], {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "inherit"],
+        shell: true,
+        windowsVerbatimArguments: true,
+        windowsHide: true
+    });
+    return status ? undefined : stdout;
+}

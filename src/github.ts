@@ -1,6 +1,11 @@
+import type {} from "./graphql-env.js";
 import { AsyncQuery, fn, from, fromAsync } from "iterable-query";
-import { IssuesListCommentsResponseItem, Octokit, Options, ProjectsListCardsResponseItem, ProjectsListColumnsResponseItem, ProjectsListForRepoResponseItem, PullsGetResponse, PullsGetResponseLabelItem, PullsListCommitsResponseItem, PullsListReviewsResponseItem, ReposListCommitsResponseItem, TeamsListMembersResponse, TeamsListMembersResponseItem, UsersGetAuthenticatedResponse } from "@octokit/rest";
+import { IssuesListCommentsResponseItem, Options, ProjectsListCardsResponseItem, ProjectsListColumnsResponseItem, ProjectsListForRepoResponseItem, PullsGetResponse, PullsGetResponseLabelItem, PullsListCommitsResponseItem, PullsListReviewsResponseItem, ReposListCommitsResponseItem, TeamsListMembersResponse, TeamsListMembersResponseItem, UsersGetAuthenticatedResponse } from "@octokit/rest";
+import { Octokit } from "octokit";
+import { type GraphQlQueryResponse, type GraphQlResponse, type RequestParameters } from "@octokit/graphql/types";
 import { approveGitCredential, GitCredential, GitUrlCredential, rejectGitCredential } from "./credentialManager.js";
+import { createGitHubGQL, GitHubGQL } from "./graphql.js";
+import { graphql } from "gql.tada";
 
 const MAX_EXCLUDE_TIMEOUT = 1000 * 60 * 60 * 24 * 7; // check back at least once every 7 days...
 
@@ -136,25 +141,28 @@ export interface ProjectServiceOptions<K extends string> {
     team?: string;
     /** Name of the Project Board to use for PR rundown. */
     project?: string;
+    classicProjects?: boolean;
     /** Names of the Project Board columns to use for PR rundown. */
     columns?: readonly K[];
 }
 
 // TODO: Make this configurable or something because we keep changing it...
 export class ProjectService<K extends string> {
-    static readonly defaultProject = "New Pull Request Status Board";
+    static readonly defaultProject = "Pull Request Status Board";
     static readonly defaultColumns = ["Needs Maintainer Review", "Needs Maintainer Action"] as const;
 
     private _credential?: GitCredential | GitUrlCredential;
     private _github: Octokit;
     private _ownerAndRepo: { owner: string, repo: string };
+    private _classicProjects = false;
     private _team: string | undefined;
     private _projectName: string;
     private _columnNames: readonly K[];
     private _columns: Record<K, Column> | null | undefined;
-    private _project: ProjectsListForRepoResponseItem | null | undefined;
+    private _project: Pick<ProjectsListForRepoResponseItem, "id"> | null | undefined;
     private _user: UsersGetAuthenticatedResponse | null | undefined;
     private _teamMembers: TeamsListMembersResponseItem[] | null | undefined;
+    private _graphql: GitHubGQL;
 
     constructor(options: ProjectServiceOptions<K>) {
         this._credential = options.credential;
@@ -162,14 +170,17 @@ export class ProjectService<K extends string> {
         const {
             owner,
             repo,
-            team,
             project = ProjectService.defaultProject,
+            classicProjects = false,
             columns = ProjectService.defaultColumns,
+            team,
         } = options;
         this._projectName = project;
         this._columnNames = columns as readonly K[];
         this._ownerAndRepo = { owner, repo };
+        this._classicProjects = classicProjects;
         this._team = team;
+        this._graphql = createGitHubGQL(this._github);
     }
 
     private static isReview(review: PullsListReviewsResponseItem): review is Review {
@@ -355,7 +366,7 @@ export class ProjectService<K extends string> {
     async getAuthenticatedUser(): Promise<UsersGetAuthenticatedResponse | undefined> {
         if (this._user === undefined) {
             try {
-                const { data: user } = await this._checkResponse(this._github.users.getAuthenticated());
+                const { data: user } = await this._checkResponse(this._github.rest.users.getAuthenticated());
                 this._user = user || null;
             }
             catch {
@@ -371,7 +382,7 @@ export class ProjectService<K extends string> {
     async listMaintainers(): Promise<TeamsListMembersResponseItem[] | undefined> {
         if (this._teamMembers === undefined && this._team) {
             try {
-                const members = await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.teams.listMembersInOrg,
+                const members = await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.rest.teams.listMembersInOrg,
                     {
                         org: this._ownerAndRepo.owner,
                         team_slug: this._team
@@ -394,8 +405,36 @@ export class ProjectService<K extends string> {
     async getProject() {
         if (this._project === undefined) {
             try {
-                const { data: projects } = await this._checkResponse(this._github.projects.listForRepo({ ...this._ownerAndRepo, state: "open" }));
-                this._project = projects.find(proj => proj.name === this._projectName) || null;
+                if (this._classicProjects) {
+                    const response = this._github.rest.projects.listForRepo({ ...this._ownerAndRepo, state: "open" });
+                    const { data: projects } = await this._checkResponse(response);
+                    this._project = projects.find(proj => proj.name === this._projectName) || null;
+                }
+                else {
+                    const projects = await this._checkResponse(fromAsync(
+                        this._graphql.paginate.iterator(graphql(`
+                            query Projects($owner: String!, $repo: String!, $cursor: String) {
+                                repository(owner: $owner, name: $repo) {
+                                    projectsV2(first: 20, after: $cursor) {
+                                        nodes {
+                                            number
+                                            title
+                                        }
+                                        pageInfo {
+                                            hasNextPage
+                                            endCursor
+                                        }
+                                    }
+                                }
+                            }
+                        `), { ...this._ownerAndRepo })
+                    )
+                        .selectMany(response => response.repository?.projectsV2.nodes ?? [])
+                        .where(project => !!project)
+                        .toArray());
+                    const project = projects.find(proj => proj?.title == this._projectName);
+                    this._project = project && { id: project.number };
+                }
             }
             catch (e) {
                 this._project = null;
@@ -414,22 +453,31 @@ export class ProjectService<K extends string> {
     async getColumns() {
         const project = await this.getProject();
         if (this._columns === undefined) {
-            const columnList = await fromAsync(this._github.paginate.iterator(this._github.projects.listColumns, { project_id: project.id }))
-                .selectMany(response => response.data)
-                .toArray();
-            const columns: Record<K, Column> = Object.create(null);
-            const requestedColumns = new Set<string>(this._columnNames);
-            for (const col of columnList) {
-                if (requestedColumns.has(col.name)) {
-                    requestedColumns.delete(col.name);
-                    columns[col.name as K] = col;
+            if (this._classicProjects) {
+                const columnList = await fromAsync(this._github.paginate.iterator(this._github.rest.projects.listColumns, { project_id: project.id }))
+                    .selectMany(response => response.data)
+                    .toArray();
+                const columns: Record<K, Column> = Object.create(null);
+                const requestedColumns = new Set<string>(this._columnNames);
+                for (const col of columnList) {
+                    if (requestedColumns.has(col.name)) {
+                        requestedColumns.delete(col.name);
+                        columns[col.name as K] = col;
+                    }
+                }
+                for (const key of requestedColumns.keys()) {
+                    this._columns = null;
+                    throw new Error(`Could not find '${key}' column.`);
+                }
+                this._columns = columns;
+            }
+            else {
+                // HACK: This is a workaround due to the confusing API for projectsV2
+                this._columns = {} as Record<K, Column>;
+                for (const columnName of this._columnNames) {
+                    this._columns[columnName] = { name: columnName as string } as Column;
                 }
             }
-            for (const key of requestedColumns.keys()) {
-                this._columns = null;
-                throw new Error(`Could not find '${key}' column.`);
-            }
-            this._columns = columns;
         }
         if (!this._columns) {
             throw new Error(`Could not resolve columns`);
@@ -443,12 +491,73 @@ export class ProjectService<K extends string> {
      * @param oldestFirst Whether to retrieve the oldest cards first.
      */
     async getCards(column: Column, oldestFirst: boolean) {
-        return await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.projects.listCards, { column_id: column.id }))
-            .selectMany(response => response.data)
-            .distinctBy(card => card.id)
-            .where(card => !card.archived)
-            [oldestFirst ? "orderBy" : "orderByDescending"](card => card.updated_at)
-            .toArray());
+        if (this._classicProjects) {
+            return await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.rest.projects.listCards, { column_id: column.id }))
+                .selectMany(response => response.data)
+                .distinctBy(card => card.id)
+                .where(card => !card.archived)
+                [oldestFirst ? "orderBy" : "orderByDescending"](card => card.updated_at)
+                .toArray());
+        }
+        else {
+            // TODO: "View" should be queried from project
+            // TODO: "Status" field should be queried from view's verticalGroupByFields
+            const project = await this.getProject();
+            return await this._checkResponse(fromAsync(
+                this._graphql.paginate.iterator(graphql(`
+                    query Cards($owner: String!, $repo: String!, $project_id: Int!, $cursor: String) {
+                        repository(owner: $owner, name: $repo) {
+                            projectV2(number: $project_id) {
+                                items(first: 20, after: $cursor) {
+                                    nodes {
+                                        fieldValueByName(name: "Status") {
+                                            ... on ProjectV2ItemFieldSingleSelectValue {
+                                                name
+                                            }
+                                        }
+                                        content {
+                                            ... on PullRequest {
+                                                number
+                                                url
+                                                updatedAt
+                                            }
+                                        }
+                                    }
+                                    pageInfo {
+                                        hasNextPage
+                                        endCursor
+                                    }
+                                }
+                            }
+                        }
+                    }
+                `), { ...this._ownerAndRepo, project_id: project.id })
+            )
+                .selectMany(response => response.repository?.projectV2?.items.nodes ?? [])
+                .select(node =>
+                    !!node &&
+                    !!node.fieldValueByName &&
+                    "name" in node.fieldValueByName &&
+                    node.fieldValueByName.name === column.name &&
+                    !!node.content &&
+                    "number" in node.content &&
+                    "url" in node.content &&
+                    "updatedAt" in node.content ? {
+                        id: node.content.number,
+                        content_url: node.content.url,
+                        updated_at: node.content.updatedAt,
+                    } as Card :
+                    undefined
+                )
+                .where(node => !!node)
+                .distinctBy(card => card.id)
+                .where(card => !card.archived)
+                [oldestFirst ? "orderBy" : "orderByDescending"](card => card.updated_at)
+                .toArray());
+
+            // number as id
+            // url as content_url
+        }
     }
 
     shouldSkip(pull: Pull, exclude?: Map<number, number>) {
@@ -466,7 +575,7 @@ export class ProjectService<K extends string> {
      * @param since The date (in ISO8601 format) from which to start listing comments
      */
     async listComments(pull: Pull, since?: string) {
-        return await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.issues.listComments,
+        return await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.rest.issues.listComments,
             {
                 ...this._ownerAndRepo,
                 issue_number: pull.number,
@@ -486,7 +595,7 @@ export class ProjectService<K extends string> {
         let query: AsyncQuery<Commit>;
         if (pull.commits <= 250 || !pull.head.repo) {
             // max allowed to retrieve...
-            query = fromAsync(this._github.paginate.iterator(this._github.pulls.listCommits,
+            query = fromAsync(this._github.paginate.iterator(this._github.rest.pulls.listCommits,
                 {
                     ...this._ownerAndRepo,
                     pull_number: pull.number
@@ -498,7 +607,7 @@ export class ProjectService<K extends string> {
             }
         }
         else {
-            query = fromAsync(this._github.paginate.iterator(this._github.repos.listCommits,
+            query = fromAsync(this._github.paginate.iterator(this._github.rest.repos.listCommits,
                 {
                     owner: pull.head.repo.owner.login,
                     repo: pull.head.repo.name,
@@ -520,7 +629,7 @@ export class ProjectService<K extends string> {
         const since = options?.since ?? "";
         const latest = options?.latest;
         const lastCommit = options?.lastCommit;
-        let reviews: Review[] | null | undefined = await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.pulls.listReviews,
+        let reviews: Review[] | null | undefined = await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.rest.pulls.listReviews,
             {
                 ...this._ownerAndRepo,
                 pull_number: pull.number,
@@ -564,7 +673,7 @@ export class ProjectService<K extends string> {
      * @param exclude A map of PR numbers to exclude to the Date they were excluded (in milliseconds since the UNIX epoch)
      */
     async getPull(pull_number: number, includeDrafts?: boolean, includeWip?: boolean, exclude?: Map<number, number>): Promise<GetPullResult> {
-        const { data: pull }: { data: Pull } = await this._checkResponse(this._github.pulls.get({ ...this._ownerAndRepo, pull_number }));
+        const { data: pull }: { data: Pull } = await this._checkResponse(this._github.rest.pulls.get({ ...this._ownerAndRepo, pull_number }));
         if (pull.state === "closed") {
             return { error: true, message: `'${pull.title.trim()}' is closed` };
         }
@@ -651,7 +760,7 @@ export class ProjectService<K extends string> {
     async latestCommit(pull: Pull) {
         if (pull.commits > 0) {
             if (pull.head.repo) {
-                const { data: [commit] } = await this._checkResponse(this._github.repos.listCommits({
+                const { data: [commit] } = await this._checkResponse(this._github.rest.repos.listCommits({
                     owner: pull.head.repo.owner.login,
                     repo: pull.head.repo.name,
                     sha: pull.head.sha,
@@ -660,7 +769,7 @@ export class ProjectService<K extends string> {
                 return commit;
             }
             else {
-                const { data: [commit] } = await this._checkResponse(this._github.pulls.listCommits({
+                const { data: [commit] } = await this._checkResponse(this._github.rest.pulls.listCommits({
                     ...this._ownerAndRepo,
                     pull_number: pull.number,
                     page: pull.commits - 1,
@@ -685,13 +794,13 @@ export class ProjectService<K extends string> {
             return;
         }
 
-        const { data: draftReview } = await this._checkResponse(this._github.pulls.createReview({
+        const { data: draftReview } = await this._checkResponse(this._github.rest.pulls.createReview({
             ...this._ownerAndRepo,
             pull_number: pull.number,
         }));
         if (!draftReview) return;
 
-        await this._checkResponse(this._github.pulls.submitReview({
+        await this._checkResponse(this._github.rest.pulls.submitReview({
             ...this._ownerAndRepo,
             pull_number: pull.number,
             event: "APPROVE",
@@ -711,7 +820,7 @@ export class ProjectService<K extends string> {
      * Merges a pull.
      */
     async mergePull(pull: Pull, method?: "merge" | "squash" | "rebase"): Promise<void> {
-        await this._checkResponse(this._github.pulls.merge({
+        await this._checkResponse(this._github.rest.pulls.merge({
             ...this._ownerAndRepo,
             pull_number: pull.number,
             merge_method: method
