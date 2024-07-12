@@ -7,6 +7,7 @@
   },
   "type": "module",
   "scripts": {
+    "prebuild": "npx gql-tada turbo",
     "build": "tsc -b .",
     "clean": "tsc -b --clean .",
     "start": "npm run build && node --enable-source-maps bin/focus-dt"
