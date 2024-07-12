@@ -1,22 +1,41 @@
+/*!
+   Copyright 2019 Microsoft Corporation
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
+import type { IssuesListCommentsResponseItem, Options, ProjectsListForRepoResponseItem, PullsGetResponseLabelItem, PullsListCommitsResponseItem, PullsListReviewsResponseItem, ReposListCommitsResponseItem, TeamsListMembersResponse, TeamsListMembersResponseItem, UsersGetAuthenticatedResponse } from "@octokit/core";
+import type { RequestParameters } from "@octokit/graphql/types";
+import { FragmentOf, graphql, readFragment, ResultOf, type TadaDocumentNode } from "gql.tada";
+import { print } from "graphql";
 import { AsyncQuery, fn, from, fromAsync } from "iterable-query";
-import { IssuesListCommentsResponseItem, Octokit, Options, ProjectsListCardsResponseItem, ProjectsListColumnsResponseItem, ProjectsListForRepoResponseItem, PullsGetResponse, PullsGetResponseLabelItem, PullsListCommitsResponseItem, PullsListReviewsResponseItem, ReposListCommitsResponseItem, TeamsListMembersResponse, TeamsListMembersResponseItem, UsersGetAuthenticatedResponse } from "@octokit/rest";
-import { approveGitCredential, GitCredential, GitUrlCredential, rejectGitCredential } from "./credentialManager.js";
+import { Octokit } from "octokit";
 
 const MAX_EXCLUDE_TIMEOUT = 1000 * 60 * 60 * 24 * 7; // check back at least once every 7 days...
 
 /** A GitHub Project Board */
-export interface Project extends ProjectsListForRepoResponseItem {}
+export interface Project extends ProjectsListForRepoResponseItem { }
 
 /** A Column in a GitHub Project Board */
-export interface Column extends ProjectsListColumnsResponseItem {}
+export interface Column { name: string; }
 
 /** A Card in a GitHub Project Board */
-export interface Card extends ProjectsListCardsResponseItem {}
+export interface Card extends ProjectItem { }
 
-export interface Comment extends IssuesListCommentsResponseItem {}
+export interface Comment extends IssuesListCommentsResponseItem { }
 
 /** A GitHub Pull Request, with some additional options */
-export interface Pull extends PullsGetResponse {
+export interface Pull extends ResultOf<typeof PullRequestFragment> {
     /** Indicates whether the authenticated user has approved the most recent commit to this PR */
     approvedByMe?: boolean | "outdated";
     /** The authenticated user's review for the PR */
@@ -125,7 +144,6 @@ export interface BotData {
  * Options for our GitHub wrapper
  */
 export interface ProjectServiceOptions<K extends string> {
-    credential?: GitCredential | GitUrlCredential;
     /** Options for the GitHub REST API */
     github: Options;
     /** Owner of the Repo to run down */
@@ -142,34 +160,36 @@ export interface ProjectServiceOptions<K extends string> {
 
 // TODO: Make this configurable or something because we keep changing it...
 export class ProjectService<K extends string> {
-    static readonly defaultProject = "New Pull Request Status Board";
+    static readonly defaultProject = "Pull Request Status Board";
     static readonly defaultColumns = ["Needs Maintainer Review", "Needs Maintainer Action"] as const;
 
-    private _credential?: GitCredential | GitUrlCredential;
     private _github: Octokit;
     private _ownerAndRepo: { owner: string, repo: string };
     private _team: string | undefined;
-    private _projectName: string;
     private _columnNames: readonly K[];
     private _columns: Record<K, Column> | null | undefined;
-    private _project: ProjectsListForRepoResponseItem | null | undefined;
+    private _project: ResultOf<typeof ProjectV2Fragment> | null | undefined;
+    private _projectName: string;
+    private _projectViewColumnGroupByFieldName: string | null | undefined;
+    private _projectViewName: string = "PRs";
     private _user: UsersGetAuthenticatedResponse | null | undefined;
     private _teamMembers: TeamsListMembersResponseItem[] | null | undefined;
+    private _graphql: GitHubGQL;
 
     constructor(options: ProjectServiceOptions<K>) {
-        this._credential = options.credential;
         this._github = new Octokit(options.github);
         const {
             owner,
             repo,
-            team,
             project = ProjectService.defaultProject,
             columns = ProjectService.defaultColumns,
+            team,
         } = options;
         this._projectName = project;
         this._columnNames = columns as readonly K[];
         this._ownerAndRepo = { owner, repo };
         this._team = team;
+        this._graphql = createGitHubGQL(this._github);
     }
 
     private static isReview(review: PullsListReviewsResponseItem): review is Review {
@@ -306,47 +326,10 @@ export class ProjectService<K extends string> {
             if (lastMaintainerReview) {
                 pull.approvedByMaintainer =
                     lastMaintainerReview.state === "CHANGES_REQUESTED" ? false :
-                    lastMaintainerReview.isOutdated ? "outdated" :
-                    true;
+                        lastMaintainerReview.isOutdated ? "outdated" :
+                            true;
             }
         }
-    }
-
-    private _requestSucceeded(): void {
-        const credential = this._credential;
-        if (credential) {
-            this._credential = undefined;
-            approveGitCredential(credential);
-        }
-    }
-
-    private _requestFailed(): void {
-        const credential = this._credential;
-        if (credential) {
-            this._credential = undefined;
-            rejectGitCredential(credential);
-        }
-    }
-
-    private async _checkResponseWorker<T>(value: Promise<T>) {
-        let ok = false;
-        try {
-            const result = await value;
-            ok = true;
-            return result;
-        }
-        finally {
-            if (ok) {
-                this._requestSucceeded();
-            }
-            else {
-                this._requestFailed();
-            }
-        }
-    }
-
-    private _checkResponse<T>(value: Promise<T>) {
-        return this._credential ? this._checkResponseWorker(value) : value;
     }
 
     /**
@@ -355,7 +338,7 @@ export class ProjectService<K extends string> {
     async getAuthenticatedUser(): Promise<UsersGetAuthenticatedResponse | undefined> {
         if (this._user === undefined) {
             try {
-                const { data: user } = await this._checkResponse(this._github.users.getAuthenticated());
+                const { data: user } = await this._github.rest.users.getAuthenticated();
                 this._user = user || null;
             }
             catch {
@@ -371,14 +354,14 @@ export class ProjectService<K extends string> {
     async listMaintainers(): Promise<TeamsListMembersResponseItem[] | undefined> {
         if (this._teamMembers === undefined && this._team) {
             try {
-                const members = await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.teams.listMembersInOrg,
+                const members = await fromAsync(this._github.paginate.iterator(this._github.rest.teams.listMembersInOrg,
                     {
                         org: this._ownerAndRepo.owner,
                         team_slug: this._team
                     }))
                     .selectMany(response => response.data)
                     .whereDefined()
-                    .toArray());
+                    .toArray();
                 this._teamMembers = members?.length ? members : null;
             }
             catch {
@@ -394,8 +377,12 @@ export class ProjectService<K extends string> {
     async getProject() {
         if (this._project === undefined) {
             try {
-                const { data: projects } = await this._checkResponse(this._github.projects.listForRepo({ ...this._ownerAndRepo, state: "open" }));
-                this._project = projects.find(proj => proj.name === this._projectName) || null;
+                const iterator = this._graphql.paginate.iterator(ProjectsV2Query, { ...this._ownerAndRepo });
+                this._project = await fromAsync(iterator)
+                    .selectMany(response => response.repository?.projectsV2.nodes ?? [])
+                    .select(project => readFragment<typeof ProjectV2Fragment>(project))
+                    .where(project => project.title === this._projectName)
+                    .single();
             }
             catch (e) {
                 this._project = null;
@@ -408,28 +395,58 @@ export class ProjectService<K extends string> {
         return this._project;
     }
 
+    async getProjectViewColumnGroupByFieldName() {
+        if (this._projectViewColumnGroupByFieldName === undefined) {
+            const { number: project_number } = await this.getProject();
+            try {
+                const iterator = this._graphql.paginate.iterator(ProjectV2ViewsQuery, { ...this._ownerAndRepo, project_number });
+                this._projectViewColumnGroupByFieldName = await fromAsync(iterator)
+                    .selectMany(response => response.repository?.projectV2?.views.nodes ?? [])
+                    .select(view => readFragment<typeof ProjectV2ViewFragment>(view))
+                    .skipUntil(view => view.name === this._projectViewName).take(1)
+                    .selectMany(view => view.verticalGroupByFields?.nodes ?? [])
+                    .where(field => field.__typename === "ProjectV2SingleSelectField")
+                    .select(field => field.name)
+                    .first();
+            }
+            catch (e) {
+                this._projectViewColumnGroupByFieldName = null;
+                throw e;
+            }
+        }
+        if (!this._projectViewColumnGroupByFieldName) {
+            throw new Error(`Could not find view '${this._projectViewName}' for project '${this._projectName}'.`);
+        }
+        return this._projectViewColumnGroupByFieldName;
+    }
+
+    async getProjectItems(): Promise<ProjectItem[]> {
+        const { number: project_number } = await this.getProject();
+        const column_field = await this.getProjectViewColumnGroupByFieldName();
+        const iterator = this._graphql.paginate.iterator(ProjectItemsQuery, { ...this._ownerAndRepo, project_number, column_field });
+        return await fromAsync(iterator)
+            .selectMany(response => response.repository?.projectV2?.items.nodes ?? [])
+            .where(node => node.fieldValueByName?.__typename === "ProjectV2ItemFieldSingleSelectValue")
+            .where(node => node.content?.__typename === "PullRequest")
+            .select(node => ({
+                ...node,
+                content: readFragment<typeof PullRequestFragment>(node.content as FragmentOf<typeof PullRequestFragment>)
+            }) as ProjectItem)
+            .where(node => this._columnNames.includes(node.fieldValueByName.name as K))
+            .where(node => node.content.state === "OPEN")
+            .distinctBy(node => node.content.number)
+            .toArray();
+    }
+
     /**
      * Gets the project board columns.
      */
     async getColumns() {
-        const project = await this.getProject();
         if (this._columns === undefined) {
-            const columnList = await fromAsync(this._github.paginate.iterator(this._github.projects.listColumns, { project_id: project.id }))
-                .selectMany(response => response.data)
-                .toArray();
-            const columns: Record<K, Column> = Object.create(null);
-            const requestedColumns = new Set<string>(this._columnNames);
-            for (const col of columnList) {
-                if (requestedColumns.has(col.name)) {
-                    requestedColumns.delete(col.name);
-                    columns[col.name as K] = col;
-                }
+            this._columns = {} as Record<K, Column>;
+            for (const columnName of this._columnNames) {
+                this._columns[columnName] = { name: columnName as string } as Column;
             }
-            for (const key of requestedColumns.keys()) {
-                this._columns = null;
-                throw new Error(`Could not find '${key}' column.`);
-            }
-            this._columns = columns;
         }
         if (!this._columns) {
             throw new Error(`Could not resolve columns`);
@@ -437,26 +454,12 @@ export class ProjectService<K extends string> {
         return this._columns;
     }
 
-    /**
-     * Gets the cards in a project board column.
-     * @param column The column to retrieve.
-     * @param oldestFirst Whether to retrieve the oldest cards first.
-     */
-    async getCards(column: Column, oldestFirst: boolean) {
-        return await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.projects.listCards, { column_id: column.id }))
-            .selectMany(response => response.data)
-            .distinctBy(card => card.id)
-            .where(card => !card.archived)
-            [oldestFirst ? "orderBy" : "orderByDescending"](card => card.updated_at)
-            .toArray());
-    }
-
     shouldSkip(pull: Pull, exclude?: Map<number, number>) {
         let excludeTimestamp = exclude?.get(pull.number);
         if (!excludeTimestamp) return false; // not excluded
         if (Date.now() >= (excludeTimestamp + MAX_EXCLUDE_TIMEOUT)) return false; // past the skip window
         const skipUntil = new Date(excludeTimestamp).toISOString();
-        const lastUpdate = pull.lastUpdatedAt || pull.updated_at;
+        const lastUpdate = pull.lastUpdatedAt || pull.updatedAt;
         return lastUpdate < skipUntil; // updated since we skipped
     }
 
@@ -466,7 +469,7 @@ export class ProjectService<K extends string> {
      * @param since The date (in ISO8601 format) from which to start listing comments
      */
     async listComments(pull: Pull, since?: string) {
-        return await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.issues.listComments,
+        return await fromAsync(this._github.paginate.iterator(this._github.rest.issues.listComments,
             {
                 ...this._ownerAndRepo,
                 issue_number: pull.number,
@@ -474,7 +477,7 @@ export class ProjectService<K extends string> {
             }))
             .selectMany(response => response.data)
             .orderBy(comment => comment.created_at)
-            .toArray());
+            .toArray();
     }
 
     /**
@@ -484,9 +487,9 @@ export class ProjectService<K extends string> {
      */
     async listCommits(pull: Pull, since?: string) {
         let query: AsyncQuery<Commit>;
-        if (pull.commits <= 250 || !pull.head.repo) {
+        if (pull.commits.totalCount <= 250 || !pull.headRepository?.name) {
             // max allowed to retrieve...
-            query = fromAsync(this._github.paginate.iterator(this._github.pulls.listCommits,
+            query = fromAsync(this._github.paginate.iterator(this._github.rest.pulls.listCommits,
                 {
                     ...this._ownerAndRepo,
                     pull_number: pull.number
@@ -498,17 +501,17 @@ export class ProjectService<K extends string> {
             }
         }
         else {
-            query = fromAsync(this._github.paginate.iterator(this._github.repos.listCommits,
+            query = fromAsync(this._github.paginate.iterator(this._github.rest.repos.listCommits,
                 {
-                    owner: pull.head.repo.owner.login,
-                    repo: pull.head.repo.name,
-                    sha: pull.head.sha,
+                    owner: pull.headRepository.owner.login,
+                    repo: pull.headRepository.name,
+                    sha: pull.headRefOid,
                     since
                 }))
                 .selectMany(response => response.data);
         }
-        return await this._checkResponse(query.orderBy(commit => commit.commit.committer?.date)
-            .toArray());
+        return await query.orderBy(commit => commit.commit.committer?.date)
+            .toArray();
     }
 
     /**
@@ -520,7 +523,7 @@ export class ProjectService<K extends string> {
         const since = options?.since ?? "";
         const latest = options?.latest;
         const lastCommit = options?.lastCommit;
-        let reviews: Review[] | null | undefined = await this._checkResponse(fromAsync(this._github.paginate.iterator(this._github.pulls.listReviews,
+        let reviews: Review[] | null | undefined = await fromAsync(this._github.paginate.iterator(this._github.rest.pulls.listReviews,
             {
                 ...this._ownerAndRepo,
                 pull_number: pull.number,
@@ -528,7 +531,7 @@ export class ProjectService<K extends string> {
             .selectMany(response => response.data)
             .where(review => !since || (review.submitted_at ?? "") >= since)
             .where(ProjectService.isReview)
-            .toArray());
+            .toArray();
         if (reviews?.length && latest) {
             reviews = ProjectService.latestReviews(reviews);
         }
@@ -548,12 +551,7 @@ export class ProjectService<K extends string> {
      * @param exclude A map of PR numbers to exclude to the Date they were excluded (in milliseconds since the UNIX epoch)
      */
     async getPullFromCard(card: Card, includeDrafts?: boolean, includeWip?: boolean, exclude?: Map<number, number>): Promise<GetPullResult> {
-        const match = /(\d+)$/.exec(card.content_url || "");
-        if (!match) {
-            return { error: true, message: "Could not determine pull number" };
-        }
-
-        return this.getPull(+match[1], includeDrafts, includeWip, exclude);
+        return this.finishGetPull(card.content, card.content.number, includeDrafts, includeWip, exclude);
     }
 
     /**
@@ -564,12 +562,21 @@ export class ProjectService<K extends string> {
      * @param exclude A map of PR numbers to exclude to the Date they were excluded (in milliseconds since the UNIX epoch)
      */
     async getPull(pull_number: number, includeDrafts?: boolean, includeWip?: boolean, exclude?: Map<number, number>): Promise<GetPullResult> {
-        const { data: pull }: { data: Pull } = await this._checkResponse(this._github.pulls.get({ ...this._ownerAndRepo, pull_number }));
-        if (pull.state === "closed") {
+        const response = await this._graphql(PullRequestQuery, { ...this._ownerAndRepo, pull_number });
+        const pull = readFragment(PullRequestFragment, response.repository?.pullRequest) as Pull | undefined;
+        return await this.finishGetPull(pull, pull_number, includeDrafts, includeWip, exclude);
+    }
+
+    private async finishGetPull(pull: Pull | undefined, pull_number: number, includeDrafts?: boolean, includeWip?: boolean, exclude?: Map<number, number>): Promise<GetPullResult> {
+        if (!pull) {
+            return { error: true, message: `PR ${pull_number} not found` };
+        }
+
+        if (pull.state === "CLOSED") {
             return { error: true, message: `'${pull.title.trim()}' is closed` };
         }
 
-        if ((pull.draft || pull.mergeable_state === "draft") && !includeDrafts) {
+        if (pull.isDraft && !includeDrafts) {
             return { error: true, message: `'${pull.title.trim()}' is a draft and is not yet ready for review` };
         }
 
@@ -577,8 +584,8 @@ export class ProjectService<K extends string> {
             return { error: true, message: `'${pull.title.trim()}' is a work-in-progress and is not yet ready for review` };
         }
 
-        const labels = new Map(pull.labels
-            .filter((label): label is Label => !!label.name)
+        const labels = new Map(pull.labels?.nodes
+            ?.filter((label): label is Label => !!label && !!label.name)
             .map(label => [label.name!, label]));
 
         if (labels.has("Revision needed")) {
@@ -611,8 +618,8 @@ export class ProjectService<K extends string> {
         const lastCommitDate = pull.lastCommit?.commit.committer?.date ?? "";
         pull.lastUpdatedAt =
             lastCommentDate > lastCommitDate ? lastCommentDate :
-            lastCommitDate > lastCommentDate ? lastCommitDate :
-            pull.updated_at;
+                lastCommitDate > lastCommentDate ? lastCommitDate :
+                    pull.updatedAt;
 
         if (this.shouldSkip(pull, exclude)) {
             return { error: true, message: `'${pull.title.trim()}' was previously skipped` };
@@ -633,7 +640,7 @@ export class ProjectService<K extends string> {
                 try {
                     pull.botData = JSON.parse(match[1]);
                 }
-                catch {}
+                catch { }
             }
             pull.supportsSelfMerge = !!pull.botStatus || !!pull.botData;
         }
@@ -649,23 +656,23 @@ export class ProjectService<K extends string> {
     }
 
     async latestCommit(pull: Pull) {
-        if (pull.commits > 0) {
-            if (pull.head.repo) {
-                const { data: [commit] } = await this._checkResponse(this._github.repos.listCommits({
-                    owner: pull.head.repo.owner.login,
-                    repo: pull.head.repo.name,
-                    sha: pull.head.sha,
+        if (pull.commits.totalCount > 0) {
+            if (pull.headRepository) {
+                const { data: [commit] } = await this._github.rest.repos.listCommits({
+                    owner: pull.headRepository.owner.login,
+                    repo: pull.headRepository.name,
+                    sha: pull.headRefOid,
                     per_page: 1
-                }));
+                });
                 return commit;
             }
             else {
-                const { data: [commit] } = await this._checkResponse(this._github.pulls.listCommits({
+                const { data: [commit] } = await this._github.rest.pulls.listCommits({
                     ...this._ownerAndRepo,
                     pull_number: pull.number,
-                    page: pull.commits - 1,
+                    page: pull.commits.totalCount - 1,
                     per_page: 1
-                }));
+                });
                 return commit;
             }
         }
@@ -685,18 +692,18 @@ export class ProjectService<K extends string> {
             return;
         }
 
-        const { data: draftReview } = await this._checkResponse(this._github.pulls.createReview({
+        const { data: draftReview } = await this._github.rest.pulls.createReview({
             ...this._ownerAndRepo,
             pull_number: pull.number,
-        }));
+        });
         if (!draftReview) return;
 
-        await this._checkResponse(this._github.pulls.submitReview({
+        await this._github.rest.pulls.submitReview({
             ...this._ownerAndRepo,
             pull_number: pull.number,
             event: "APPROVE",
             review_id: draftReview.id
-        }));
+        });
 
         const [me, maintainers, reviews] = await Promise.all([
             this.getAuthenticatedUser(),
@@ -711,10 +718,177 @@ export class ProjectService<K extends string> {
      * Merges a pull.
      */
     async mergePull(pull: Pull, method?: "merge" | "squash" | "rebase"): Promise<void> {
-        await this._checkResponse(this._github.pulls.merge({
+        await this._github.rest.pulls.merge({
             ...this._ownerAndRepo,
             pull_number: pull.number,
             merge_method: method
-        }));
+        });
     }
 }
+
+declare module 'gql.tada' {
+    interface setupSchema {
+        scalars: {
+            DateTime: string;
+            GitObjectID: string;
+            URI: string;
+        }
+    }
+}
+
+type GitHubGQLFunc = <R, V extends Record<string, unknown>>(
+    query: TadaDocumentNode<R, V>,
+    variables?: RequestParameters & V,
+) => Promise<R>;
+
+type GitHubGQLPaginateIteratorFunc = <R, V extends Record<string, unknown>>(
+    query: TadaDocumentNode<R, V>,
+    variables?: RequestParameters & V,
+) => AsyncIterable<R>;
+
+type GitHubGQL = GitHubGQLFunc & {
+    paginate: GitHubGQLPaginate;
+};
+
+type GitHubGQLPaginate = GitHubGQLFunc & {
+    iterator: GitHubGQLPaginateIteratorFunc;
+};
+
+type GQLResult<T> = T extends TadaDocumentNode<infer R, any, any> ? R : never;
+
+function createGitHubGQL(octokit: Octokit): GitHubGQL {
+    const gql: GitHubGQLFunc = (query, variables) =>
+        octokit["graphql"]<GQLResult<typeof query>>(print(query), variables);
+
+    const paginate: GitHubGQLFunc = (query, variables) =>
+        octokit.graphql.paginate<GQLResult<typeof query> & object>(print(query), variables);
+
+    const iterator: GitHubGQLPaginateIteratorFunc = (query, variables) =>
+        octokit.graphql.paginate.iterator<GQLResult<typeof query>>(
+            print(query),
+            variables
+        ) as AsyncIterable<GQLResult<typeof query>>;
+
+    const gitHubGQL = gql as GitHubGQL;
+    gitHubGQL.paginate = paginate as GitHubGQLPaginate;
+    gitHubGQL.paginate.iterator = iterator;
+
+    return gitHubGQL;
+}
+
+const ProjectV2Fragment = graphql(`
+    fragment ProjectV2Fragment on ProjectV2 {
+        __typename
+        number
+        title
+    }
+`);
+
+const ProjectsV2Query = graphql(`
+    query ProjectsQuery($owner: String!, $repo: String!, $cursor: String) {
+        repository(owner: $owner, name: $repo) {
+            projectsV2(first: 1, after: $cursor) {
+                nodes { ...ProjectV2Fragment }
+                pageInfo { hasNextPage endCursor }
+            }
+        }
+    }
+`, [ProjectV2Fragment]);
+
+const ProjectV2ViewFragment = graphql(`
+    fragment ProjectV2ViewFragment on ProjectV2View {
+        __typename
+        number
+        name
+        verticalGroupByFields(first: 1) {
+            nodes {
+                __typename
+                ... on ProjectV2SingleSelectField {
+                    name
+                }
+            }
+        }
+    }
+`);
+
+const ProjectV2ViewsQuery = graphql(`
+    query ProjectV2ViewsQuery($owner: String!, $repo: String!, $project_number: Int!, $cursor: String) {
+        repository(owner: $owner, name: $repo) {
+            projectV2(number: $project_number) {
+                views(first: 1, after: $cursor) {
+                    pageInfo { hasNextPage, endCursor }
+                    nodes { ...ProjectV2ViewFragment }
+                }
+            }
+        }
+    }
+`, [ProjectV2ViewFragment]);
+
+const PullRequestFragment = graphql(`
+    fragment PullRequestFragment on PullRequest {
+        __typename
+        number
+        url
+        updatedAt
+        state
+        title
+        author { login }
+        labels(first: 20) {
+            nodes {
+                name
+                color
+            }
+        }
+        headRefOid
+        headRepository {
+            owner {
+                login
+            }
+            name
+        }
+        isDraft
+        mergeable
+        commits {
+            totalCount
+        }
+    }
+`);
+
+const ProjectItemsQuery = graphql(`
+    query ProjectItems($owner: String!, $repo: String!, $project_number: Int!, $column_field: String!, $cursor: String) {
+        repository(owner: $owner, name: $repo) {
+            projectV2(number: $project_number) {
+                items(first: 20, after: $cursor) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes {
+                        __typename
+                        fieldValueByName(name: $column_field) {
+                            ... on ProjectV2ItemFieldSingleSelectValue {
+                                __typename
+                                name
+                            }
+                        }
+                        content { ... PullRequestFragment }
+                    }
+                }
+            }
+        }
+    }
+`, [PullRequestFragment]);
+
+const PullRequestQuery = graphql(`
+    query PullRequest($owner: String!, $repo: String!, $pull_number: Int!) {
+        repository(owner: $owner, name: $repo) {
+            pullRequest(number: $pull_number) { ...PullRequestFragment }
+        }
+    }
+`, [PullRequestFragment]);
+
+type __ProjectItemBuilder<T = NonNullable<NonNullable<NonNullable<NonNullable<ResultOf<typeof ProjectItemsQuery>>["repository"]>["projectV2"]>["items"]["nodes"]>[number]> = {
+    [P in keyof T]:
+        P extends "fieldValueByName" ? Extract<T[P], { __typename: "ProjectV2ItemFieldSingleSelectValue" }> :
+        P extends "content" ? ResultOf<typeof PullRequestFragment> :
+        T[P]
+};
+
+export type ProjectItem = __ProjectItemBuilder;

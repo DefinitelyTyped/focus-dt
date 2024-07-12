@@ -5,7 +5,7 @@ export {};
 type OctokitOptions = NonNullable<ConstructorParameters<typeof Core>[0]>;
 
 // Workaround for @octokit/core removing named types for REST API responses
-declare module "@octokit/rest" {
+declare module "@octokit/core" {
     interface DefaultTokenAuthOptions extends OctokitOptions {
         auth?: string;
         authStrategy?: undefined;
