@@ -140,7 +140,7 @@ function checkAuthenticated(status: AuthStatus) {
 }
 
 function hasRequiredScopes(status: AuthStatus) {
-    return !!status.scopes?.includes("read:project") || !status.scopes?.includes("project");
+    return !!status.scopes?.includes("read:project") || !!status.scopes?.includes("project");
 }
 
 function checkRequiredScopes(status: AuthStatus) {
