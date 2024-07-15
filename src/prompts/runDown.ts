@@ -1,7 +1,23 @@
+/*!
+   Copyright 2019 Microsoft Corporation
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 import chalk from "chalk";
-import { Context } from "../context";
-import { Prompt, pushPrompt } from "../prompt";
-import { saveSettings, saveSkipped, Settings } from "../settings";
+import { Context } from "../context.js";
+import { Prompt, pushPrompt } from "../prompt.js";
+import { saveSettings, saveSkipped, Settings } from "../settings.js";
 
 export function createRunDownPrompt(settings: Settings, appContext: Context, filterPrompt: Prompt<boolean>, approvalPrompt: Prompt<boolean>, mergePrompt: Prompt<boolean>): Prompt {
     return {
@@ -173,6 +189,23 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
             //         await appContext.screen.refresh(true);
             //     }
             // },
+            {
+                key: "tab",
+                description: "Switch columns",
+                hidden: true,
+                action: async (prompt) => {
+                    const nextState = appContext.currentState === appContext.reviewState ?
+                        appContext.actionState ?? appContext.reviewState :
+                        appContext.reviewState ?? appContext.actionState;
+                    if (nextState !== appContext.currentState) {
+                        appContext.currentState = nextState;
+                        if (appContext.currentState) {
+                            appContext.currentState.offset = 0;
+                        }
+                    }
+                    await prompt.close();
+                }
+            },
             {
                 key: "F5",
                 description: "Column refresh",

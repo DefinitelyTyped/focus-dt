@@ -15,7 +15,7 @@
 */
 
 import yargs = require("yargs");
-import { getDefaultSettingsFile, readSettings } from "./settings";
+import { getDefaultSettingsFile, readSettings } from "./settings.js";
 
 export const options = yargs
     .usage("$0 [options]")

@@ -1,6 +1,22 @@
+/*!
+   Copyright 2019 Microsoft Corporation
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 import * as readline from "readline";
 import chalk from "chalk";
-import stripAnsi from "strip-ansi";
+import stripAnsi = require("strip-ansi");
 
 let currentPrompt: EvaluatedPrompt<any, any> | undefined;
 const promptStack: EvaluatedPrompt<any, any>[] = [];
@@ -198,7 +214,7 @@ function formatOption(option: EvaluatedOption<any, any>, prompt: EvaluatedPrompt
     if (!option.formatted) {
         const checked = hasCheckedOption(prompt) ? formatChecked(option.checked, option.checkStyle, option.checkColor?.color) : "";
         const formatted = ` ${checked}> Press ${chalk.yellow(formatKey(isArray(option.key) ? option.key[0] : option.key))} to ${option.description.replace(/\.$/, "")}.\n`;
-        option.formatted = option.disabled ? chalk.gray(stripAnsi(formatted)) : formatted;
+        option.formatted = option.disabled ? chalk.gray(stripAnsi.default(formatted)) : formatted;
     }
     return option.formatted;
 }

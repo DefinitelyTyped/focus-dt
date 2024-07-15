@@ -14,26 +14,27 @@
    limitations under the License.
 */
 
-import * as fs from "fs";
 import chalk from "chalk";
+import * as fs from "fs";
+import { from } from "iterable-query";
+import { format as formatTimeago } from "timeago.js";
+import { Chrome } from "./chrome.js";
+import { CardRunDownState, ColumnRunDownState, Context, WorkArea } from "./context.js";
+import { Column, Label, ProjectItem, ProjectService } from "./github.js";
+import { init } from "./init.js";
+import { addOnPromptSizeChange, addOnQuit, getPromptLineCount, hidePrompt, isPromptVisible, pushPrompt, showPrompt } from "./prompt.js";
+import { createApprovalPrompt } from "./prompts/approval.js";
+import { createFilterPrompt } from "./prompts/filter.js";
+import { createMergePrompt } from "./prompts/merge.js";
+import { createRunDownPrompt } from "./prompts/runDown.js";
+import { Screen } from "./screen.js";
+import { readSkipped } from "./settings.js";
 import colorConvert = require("color-convert");
-import { ProjectService, Column, Label } from "./github";
-import { Chrome } from "./chrome";
-import { pushPrompt, addOnQuit, isPromptVisible, hidePrompt, showPrompt, getPromptLineCount, addOnPromptSizeChange } from "./prompt";
-import { readSkipped } from "./settings";
-import { Screen } from "./screen";
-import { createMergePrompt } from "./prompts/merge";
-import { createApprovalPrompt } from "./prompts/approval";
-import { CardRunDownState, ColumnRunDownState, Context, WorkArea } from "./context";
-import { createFilterPrompt } from "./prompts/filter";
-import { createRunDownPrompt } from "./prompts/runDown";
-import { init } from "./init";
 
 async function main() {
     process.title = "focus-dt";
     let {
         token,
-        credential,
         settings
     } = await init();
 
@@ -50,7 +51,6 @@ async function main() {
     });
 
     const service = new ProjectService({
-        credential,
         github: { auth: token },
         project: ProjectService.defaultProject,
         columns: ProjectService.defaultColumns,
@@ -59,7 +59,6 @@ async function main() {
         team: "typescript-team"
     });
 
-    credential = undefined;
     const columns = await service.getColumns();
     const screen = new Screen(process.stdout, {
         getPromptLineCount,
@@ -71,6 +70,7 @@ async function main() {
     const context: Context = {
         actionState: undefined,
         reviewState: undefined,
+        currentState: undefined,
         currentPull: undefined,
         workArea: undefined,
         skipped: new Map<number, number>(readSkipped()?.skipped),
@@ -86,6 +86,7 @@ async function main() {
     const mergePrompt = createMergePrompt(settings);
     const runDownPrompt = createRunDownPrompt(settings, context, filterPrompt, approvalPrompt, mergePrompt);
 
+    let projectItems: ProjectItem[] | undefined;
     let lastColumn: Column | undefined;
     let lastShowAction = false;
     let lastShowReview = false;
@@ -108,7 +109,12 @@ async function main() {
 
         const column1 = context.reviewState;
         const column2 = context.actionState;
-        context.workArea = nextCard(column1) || nextCard(column2);
+
+        context.workArea = nextCard(context.currentState);
+        if (!context.workArea) {
+            context.currentState = nextColumn();
+            context.workArea = nextCard(context.currentState);
+        }
 
         if (lastShowAction !== settings.needsAction ||
             lastShowReview !== settings.needsReview ||
@@ -175,14 +181,24 @@ async function main() {
             context.currentPull = pull;
             screen.clearPull();
             screen.addPull(`[${column.offset}/${column.cards.length}] ${pull.title}`);
-            screen.addPull(chalk`    {cyan.underline ${pull.html_url}}{reset }`);
-            screen.addPull(chalk`    {whiteBright Author:}  @${pull.user?.login}`);
-            screen.addPull(chalk`    {whiteBright Updated:} ${pull.lastUpdatedAt ?? pull.updated_at}${skipMessage}`);
+            screen.addPull(chalk`    {cyan.underline ${pull.url}}{reset }`);
+            screen.addPull(chalk`    {whiteBright Author:}  @${pull.author?.login}`);
+            screen.addPull(chalk`    {whiteBright Updated:} ${formatDate(pull.lastUpdatedAt ?? pull.updatedAt)}${skipMessage}`);
             screen.addPull(chalk`    {whiteBright Tags:}    ${[...labels].map(colorizeLabel).join(', ')}`);
             if (pull.botStatus) {
                 screen.addPull(chalk`    {whiteBright Status:}`);
                 for (const line of pull.botStatus) {
-                    if (line.trim()) screen.addPull(`    ${line}`);
+                    if (line.trim()) {
+                        const lineText = line
+                            .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+                            .replace(/(?<=changes which affect DT infrastructure) \(((?:(?:, )?`[^`]+`)+)\)/, (_, filesText: string) => `:${
+                                filesText
+                                    .split(/, ?/g)
+                                    .map(file => `\n          📄 ${file.slice(1, -1)}`)
+                                    .join("")
+                            }`);
+                        screen.addPull(`    ${lineText}`);
+                    }
                 }
             }
             if (pull.ownerReviews) {
@@ -197,7 +213,7 @@ async function main() {
                     const message = approved ? "approved" : "requested changes";
                     const ownerReviewFor = `(${review.ownerReviewFor.join(", ")})`;
                     const outdated = review.isOutdated ? chalk` {yellow [outdated]}` : "";
-                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} ${ownerReviewFor} {${color} ${message}} on ${review.submitted_at}${outdated}.`);
+                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} ${ownerReviewFor} {${color} ${message}} on ${formatDate(review.submitted_at)}${outdated}.`);
                     for (const packageName of review.ownerReviewFor) {
                         packages.delete(packageName);
                     }
@@ -215,7 +231,7 @@ async function main() {
                     const color = approved ? "greenBright" : "redBright";
                     const message = approved ? "approved" : "requested changes";
                     const outdated = review.isOutdated ? chalk` {yellow [outdated]}` : "";
-                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} {${color} ${message}} on ${review.submitted_at}${outdated}.`);
+                    screen.addPull(chalk`     * ${mark} {whiteBright @${review.user.login}} {${color} ${message}} on ${formatDate(review.submitted_at)}${outdated}.`);
                 }
             }
             if (pull.recentCommits) {
@@ -226,12 +242,12 @@ async function main() {
                 screen.addPull(chalk`    {whiteBright Recent Commits${pull.approvedByMe === "outdated" ? " (since you last approved)" : ""}:}`);
                 for (const commit of recentCommits) {
                     screen.addPull(`     * ${commit.commit.message.replace(/\n(\s*\n)+/g, "\n").replace(/\n(?!$)/g, "\n       ")}`);
-                    screen.addPull(chalk`       {whiteBright @${commit.committer?.login}} on ${commit.commit.committer?.date}`);
+                    screen.addPull(chalk`       {whiteBright @${commit.committer?.login}} on ${formatDate(commit.commit.committer?.date)}`);
                 }
             }
             screen.addPull(" ");
             screen.render();
-            await chrome.navigateTo(pull.html_url);
+            await chrome.navigateTo(pull.url);
         }
 
         await pushPrompt(runDownPrompt);
@@ -243,7 +259,13 @@ async function main() {
     }
 
     async function populateState(column: Column, previousState: ColumnRunDownState | undefined): Promise<ColumnRunDownState> {
-        const cards = await service.getCards(column, settings.oldest);
+        if (!projectItems || previousState?.refresh) {
+            projectItems = await service.getProjectItems();
+        }
+        const cards = from(projectItems)
+            .where(item => item.fieldValueByName.name === column.name)
+            [settings.oldest ? "orderBy" : "orderByDescending"](item => item.content.updatedAt)
+            .toArray();
         const newState: ColumnRunDownState = { column, cards: cards.map(card => ({ card })), offset: 0, oldestFirst: settings.oldest, completedCount: 0, skippedCount: 0, deferredCount: 0 };
         if (previousState?.refresh) {
             // move previously seen, unchanged cards to the front
@@ -252,7 +274,7 @@ async function main() {
             const previouslySeenCards: CardRunDownState[] = [];
             const otherCards: CardRunDownState[] = [];
             for (const newCard of newState.cards) {
-                const prevCardIndex = previousState.cards.findIndex(prevCard => prevCard.card.id === newCard.card.id);
+                const prevCardIndex = previousState.cards.findIndex(prevCard => prevCard.card.content.number === newCard.card.content.number);
                 if (prevCardIndex >= 0) {
                     const prevCard = previousState.cards[prevCardIndex];
                     if (prevCard.deferred) {
@@ -285,6 +307,12 @@ async function main() {
             newState.offset = previouslySeenCards.length;
         }
         return newState;
+    }
+
+    function nextColumn() {
+        return context.currentState === context.reviewState ?
+            context.actionState ?? context.reviewState :
+            context.reviewState ?? context.actionState;
     }
 
     function nextCard(column: ColumnRunDownState | undefined): WorkArea | undefined {
@@ -327,6 +355,31 @@ function formatTab(column: ColumnRunDownState | undefined, columnName: string, s
     }
 
     return chalk`${columnLeft}{${columnColor}  ${column1Selected}${columnName}: ${columnCount} }${columnRight}`;
+}
+
+const yearMonthDayFormat = new Intl.DateTimeFormat('en-US', {
+    dateStyle: "medium"
+});
+
+const monthDayFormat = new Intl.DateTimeFormat('en-US', {
+    month: "short",
+    day: "numeric",
+});
+
+const timeFormat = new Intl.DateTimeFormat('en-US', {
+    timeStyle: "short"
+});
+
+function formatDate(value: Date | string | number | undefined) {
+    if (value === undefined) return "";
+    if (typeof value === "number" || typeof value === "string") value = new Date(value);
+    const now = new Date();
+    const timeago = formatTimeago(value, "en_US", { relativeDate: now });
+    const fmt =
+        value.getFullYear() !== now.getFullYear() ? yearMonthDayFormat :
+        value.getMonth() !== now.getMonth() || value.getDay() !== now.getDay() ? monthDayFormat :
+        timeFormat;
+    return `${fmt.format(value)} (${timeago})`;
 }
 
 function colorizeLabel(label: Label) {
