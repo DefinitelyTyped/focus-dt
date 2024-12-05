@@ -25,7 +25,7 @@ Authentication options:
 
 Configuration options:
   --config   Loads settings from a JSON file
-                   [string] [default: "C:\Users\rbuckton\.focus-dt\config.json"]
+                           [string] [default: '%HOMEDIR%/.focus-dt/config.json']
   --save     Saves settings to '%HOMEDIR%/.focus-dt/config.json' and exits
                                                                        [boolean]
   --save-to  Saves settings to the specified file and exits             [string]
