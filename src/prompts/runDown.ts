@@ -147,17 +147,14 @@ export function createRunDownPrompt(settings: Settings, appContext: Context, fil
                 description: "skip until there are updates to the PR.",
                 action: async (prompt) => {
                     if (appContext.currentPull) {
-                        let skipDate = appContext.skipped.get(appContext.currentPull.number);
-                        if (skipDate === undefined) {
-                            appContext.skipped.set(appContext.currentPull.number, Date.now());
-                            if (appContext.workArea) {
-                                appContext.workArea.column.skippedCount++;
-                                appContext.workArea.card.skipped = true;
-                            }
-                            appContext.screen.clearPull();
-                            appContext.screen.addPull(`[${appContext.workArea!.column.offset}/${appContext.workArea?.column.cards.length}] '${appContext.currentPull.title}' ${chalk.yellow("[skipped]")}.`);
-                            saveSkipped(appContext.skipped);
+                        appContext.skipped.set(appContext.currentPull.number, Date.now());
+                        if (appContext.workArea) {
+                            appContext.workArea.column.skippedCount++;
+                            appContext.workArea.card.skipped = true;
                         }
+                        appContext.screen.clearPull();
+                        appContext.screen.addPull(`[${appContext.workArea!.column.offset}/${appContext.workArea?.column.cards.length}] '${appContext.currentPull.title}' ${chalk.yellow("[skipped]")}.`);
+                        saveSkipped(appContext.skipped);
                     }
                     await prompt.close();
                 }
