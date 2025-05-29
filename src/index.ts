@@ -42,7 +42,7 @@ async function main() {
         return;
     }
 
-    const chrome = new Chrome(settings.port, settings.timeout, settings.chromePath);
+    const chrome = new Chrome(settings.port, settings.timeout, settings.chromePath, settings.chromeUserDataDir, settings.chromeProfile);
     const log = fs.createWriteStream("focus-dt.log", { flags: "a" });
 
     addOnQuit(() => {
